@@ -55,7 +55,7 @@
 
 namespace {
 
-const char kVersion[] = "0.5";  // in the first line of the log; the package's README carries the same number
+const char kVersion[] = "0.5.1";  // in the first line of the log; the package's README carries the same number
 
 // ---------------------------------------------------------------- empire.retail.dll 1.1.0 (RVAs, base 0x10000000)
 const DWORD kPoolSetupCall = 0x9D485;     // engine start: call <pool setup> (thiscall (number_of_threads, pin), ret 8)
@@ -93,7 +93,7 @@ const char* const kNames[15] = {"GetFileVersionInfoA",     "GetFileVersionInfoBy
 
 FILE* g_log;
 BYTE* g_base;
-wchar_t g_dir[MAX_PATH];
+std::wstring g_dir;  // the folder of shogun2.exe
 DWORD g_mainThread;
 bool g_threadsFree = true, g_mainPcores = true, g_packCache = true, g_skipIntro = false, g_frameLog = false;
 bool g_memoryLog = true, g_crashDumps = true, g_loadsNoVsync = true;
@@ -136,18 +136,47 @@ void Log(const char* fmt, ...) {
     }
 }
 
-void LoadReal() {
-    if (g_real) return;
-    wchar_t path[MAX_PATH];
-    GetSystemDirectoryW(path, MAX_PATH);  // SysWOW64 for this 32-bit process
-    wcscat_s(path, L"\\version.dll");
-    g_real = LoadLibraryW(path);
-    if (!g_real) {
+// The real version.dll is loaded on the first call of an export, by whichever thread makes it. Another thread calling
+// at the same moment waits until the table is complete (up to 0.5 it could find the module already set and the entry
+// it needed still empty, and its call failed).
+INIT_ONCE g_realOnce = INIT_ONCE_STATIC_INIT;
+
+BOOL CALLBACK LoadRealOnce(PINIT_ONCE, PVOID, PVOID*) {
+    wchar_t sys[MAX_PATH];
+    UINT n = GetSystemDirectoryW(sys, MAX_PATH);  // SysWOW64 for this 32-bit process
+    if (n == 0 || n >= MAX_PATH) {
+        Log("could not find the system folder (error %lu)", GetLastError());
+        return TRUE;
+    }
+    std::wstring path = std::wstring(sys, n) + L"\\version.dll";
+    HMODULE real = LoadLibraryW(path.c_str());
+    if (!real) {
         DWORD error = GetLastError();
         Log("could not load %s (error %lu)", Utf8(path).c_str(), error);
-        return;
+        return TRUE;
     }
-    for (int i = 0; i < 15; ++i) g_fn[i] = GetProcAddress(g_real, kNames[i]);
+    for (int i = 0; i < 15; ++i) g_fn[i] = GetProcAddress(real, kNames[i]);
+    g_real = real;
+    return TRUE;
+}
+
+void LoadReal() { InitOnceExecuteOnce(&g_realOnce, &LoadRealOnce, nullptr, nullptr); }
+
+// The folder of shogun2.exe, however long its path (up to 0.5 a buffer of MAX_PATH characters: in a game folder whose
+// path had 241 characters or more the log's name no longer fitted, and swprintf_s ended the game at start).
+std::wstring ExeFolder() {
+    std::vector<wchar_t> buf(MAX_PATH);
+    for (;;) {
+        DWORD n = GetModuleFileNameW(nullptr, buf.data(), (DWORD)buf.size());
+        if (n == 0) return std::wstring();
+        if (n < buf.size()) {
+            std::wstring path(buf.data(), n);
+            size_t slash = path.rfind(L'\\');
+            return slash == std::wstring::npos ? std::wstring() : path.substr(0, slash);
+        }
+        if (buf.size() >= 32768) return std::wstring();
+        buf.resize(buf.size() * 2);
+    }
 }
 
 // ---------------------------------------------------------------- settings
@@ -290,9 +319,9 @@ void CheckIniKeys(const wchar_t* ini) {
 }
 
 void ReadSettings() {
-    wchar_t ini[MAX_PATH];
-    swprintf_s(ini, L"%ls\\shogun2_engine.ini", g_dir);
-    if (GetFileAttributesW(ini) == INVALID_FILE_ATTRIBUTES) {
+    std::wstring path = g_dir + L"\\shogun2_engine.ini";
+    const wchar_t* ini = path.c_str();
+    if (!g_dir.empty() && GetFileAttributesW(ini) == INVALID_FILE_ATTRIBUTES) {
         FILE* f = nullptr;
         if (_wfopen_s(&f, ini, L"w") == 0 && f) {
             fputs("; Shogun 2 engine fixes (version.dll). Delete version.dll to turn them all off.\n"
@@ -306,9 +335,9 @@ void ReadSettings() {
                   "; pack_cache: 1 reads the .pack files through the Windows file cache (repeated loads come from RAM).\n"
                   "; texture_fast_path: 1 makes textures straight from the file when it already holds the format the\n"
                   ";        game asks for, instead of D3DX re-encoding every one (most of a battle's load time); 0 off.\n"
-                  "; loads_without_vsync: 1 draws the loading screen without waiting for vsync. With vsync on that saves\n"
-                  ";        1.5-3.5 s per load at 60-120 Hz and almost nothing at 240 Hz; the game itself keeps vsync.\n"
-                  ";        0: as the game does it.\n"
+                  "; loads_without_vsync: 1 draws the loading screen without waiting for vsync. With vsync on that saved\n"
+                  ";        1.3-3.4 s per load at 120 Hz (60 Hz was not measured), almost nothing at 240 Hz;\n"
+                  ";        the game itself keeps vsync. 0: as the game does it.\n"
                   "; skip_intro_movies: 1 goes straight to the main menu.\n"
                   "; frame_log: 1 writes shogun2_frames.csv (frame times and the main thread's CPU), for diagnostics:\n"
                   ";        about 15 MB an hour at 240 fps; the file is written anew at every start.\n"
@@ -524,10 +553,12 @@ HANDLE WINAPI HookOpen(LPCWSTR path, DWORD access, DWORD share, LPSECURITY_ATTRI
         if (g_packCache) f &= ~FILE_FLAG_NO_BUFFERING;
     }
     HANDLE h = createFile(path, access, share, sa, disposition, f, templ);
+    DWORD error = GetLastError();  // the engine may read it, and the logging below may change it
     LONG n = InterlockedIncrement(&g_opens);
     if (n <= 400)
         Log("open %08lX -> %08lX %s: %s", flags, f, h == INVALID_HANDLE_VALUE ? "failed" : "ok", Utf8(path).c_str());
     if (n == 400) Log("open: further opens are not logged");
+    SetLastError(error);
     return h;
 }
 
@@ -643,10 +674,8 @@ void HookFrames() {
     g_origFrame = (FrameFn)(g_base + kFrameFunc);
     void* hook = (void*)&HookFrame;
     if (WriteCode((BYTE*)slot, &hook, 4)) Log("frame statistics: on");
-    if (g_frameLog) {
-        wchar_t path[MAX_PATH];
-        swprintf_s(path, L"%ls\\shogun2_frames.csv", g_dir);
-        g_frames = _wfsopen(path, L"w", _SH_DENYWR);
+    if (g_frameLog && !g_dir.empty()) {
+        g_frames = _wfsopen((g_dir + L"\\shogun2_frames.csv").c_str(), L"w", _SH_DENYWR);
         if (g_frames) fputs("time_s,frame_ms,cpu\n", g_frames);
     }
 }
@@ -812,6 +841,11 @@ bool ParseDds(const BYTE* d, SIZE_T size, Dds& out) {
     DWORD a = *(DWORD*)(d + 104), caps2 = *(DWORD*)(d + 112);
     out.height = *(DWORD*)(d + 12);
     out.width = *(DWORD*)(d + 16);
+    // The header can say anything. Sizes past what D3D11 allows go to D3DX: up to 0.5 a broken or forged header could
+    // make the size sums below wrap around, and the fast path then wrote past its table or looped forever.
+    if (out.width == 0 || out.height == 0 || out.width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
+        out.height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
+        return false;
     out.mips = (flags & 0x20000) && *(DWORD*)(d + 28) ? *(DWORD*)(d + 28) : 1;  // DDSD_MIPMAPCOUNT
     out.arraySize = 1;
     out.cube = out.legacyRgb = false;
@@ -823,7 +857,9 @@ bool ParseDds(const BYTE* d, SIZE_T size, Dds& out) {
             if (size < 148 || *(DWORD*)(d + 132) != D3D11_RESOURCE_DIMENSION_TEXTURE2D) return false;
             out.format = (DXGI_FORMAT) * (DWORD*)(d + 128);
             out.cube = (*(DWORD*)(d + 136) & D3D11_RESOURCE_MISC_TEXTURECUBE) != 0;
-            out.arraySize = *(DWORD*)(d + 140) * (out.cube ? 6 : 1);
+            DWORD layers = *(DWORD*)(d + 140), faces = out.cube ? 6 : 1;
+            if (layers == 0 || layers > D3D11_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION / faces) return false;
+            out.arraySize = layers * faces;
             out.bits = d + 148;
             dx10 = true;
         } else if (fourcc == MAKEFOURCC('D', 'X', 'T', '1')) {
@@ -877,7 +913,7 @@ Why FastTexture(ID3D11Device* device, const BYTE* data, SIZE_T size, const LoadI
     if (li && ((given(li->width) && li->width != w) || (given(li->height) && li->height != h))) return kResize;
     if (li && given(li->depth) && li->depth != 1) return kResize;
     UINT full = 1;
-    while ((std::max(w, h) >> full) > 0) ++full;
+    for (UINT m = std::max(w, h); m > 1; m >>= 1) ++full;
     UINT avail = dds.mips - skip, need = full;
     if (li && li->mipLevels == kD3dxFromFile) need = avail;
     else if (li && given(li->mipLevels)) need = std::min(li->mipLevels, full);
@@ -917,7 +953,7 @@ Why FastTexture(ID3D11Device* device, const BYTE* data, SIZE_T size, const LoadI
     // a cube file loaded without the cube flag becomes a plain texture of one face in D3DX, and the reverse fails
     if (dds.cube != ((desc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE) != 0) || (dds.cube && dds.arraySize % 6))
         return kCube;
-    std::vector<D3D11_SUBRESOURCE_DATA> init(dds.arraySize * need);
+    std::vector<D3D11_SUBRESOURCE_DATA> init((size_t)dds.arraySize * need);
     const BYTE* p = dds.bits;
     const BYTE* end = data + size;
     UINT block = BlockBytes(dds.format), pixel = PixelBytes(dds.format);
@@ -928,8 +964,9 @@ Why FastTexture(ID3D11Device* device, const BYTE* data, SIZE_T size, const LoadI
             UINT mw = std::max(1u, dds.width >> mip), mh = std::max(1u, dds.height >> mip);
             UINT pitch = block ? std::max(1u, (mw + 3) / 4) * block : mw * pixel;
             UINT rows = block ? std::max(1u, (mh + 3) / 4) : mh;
-            SIZE_T bytes = (SIZE_T)pitch * rows;
-            if (p + bytes > end) return kTruncated;  // D3DX decides what to do
+            unsigned long long total = (unsigned long long)pitch * rows;  // up to 2^32 bytes: more than a SIZE_T holds
+            if (total > (unsigned long long)(end - p)) return kTruncated;  // D3DX decides what to do
+            SIZE_T bytes = (SIZE_T)total;
             if (mip >= skip && mip < skip + need) {
                 const BYTE* src = p;
                 if (swizzle) {
@@ -997,11 +1034,13 @@ HRESULT WINAPI HookCreateTexture(void* device, const void* data, SIZE_T size, Lo
     char src[48], key[96];
     DescribeDds((const BYTE*)data, size, src, sizeof src);
     const char* how = fast ? "fast" : g_textureFast ? kWhy[why] : "d3dx";
+    // cut to fit: a broken header can make the file's part a third of the line (up to 0.5 sprintf_s ended the game)
     if (info)
-        sprintf_s(key, "[%s] %s -> fmt %d mips %d skip %u filter %X misc %X%s", how, src, (int)info->format,
-                  (int)info->mipLevels, info->firstMip, info->filter, info->miscFlags, FAILED(hr) ? " FAILED" : "");
+        _snprintf_s(key, sizeof key, _TRUNCATE, "[%s] %s -> fmt %d mips %d skip %u filter %X misc %X%s", how, src,
+                    (int)info->format, (int)info->mipLevels, info->firstMip, info->filter, info->miscFlags,
+                    FAILED(hr) ? " FAILED" : "");
     else
-        sprintf_s(key, "[%s] %s -> (no load info)%s", how, src, FAILED(hr) ? " FAILED" : "");
+        _snprintf_s(key, sizeof key, _TRUNCATE, "[%s] %s -> (no load info)%s", how, src, FAILED(hr) ? " FAILED" : "");
     EnterCriticalSection(&g_texLock);
     AddTexture(g_texKinds, key, ms, size / 1048576.0);
     AddTexture(g_texTotal, key, ms, size / 1048576.0);
@@ -1065,6 +1104,8 @@ void LogSpace(const char* when) {
 
 LPTOP_LEVEL_EXCEPTION_FILTER g_nextFilter;
 volatile LONG g_dumped;
+std::wstring g_dumpDir;  // SHOGUN2_ENGINE_DUMP_DIR: engine\test\test.cmd keeps its test dumps out of the game's folder
+DWORD g_filterTls = TLS_OUT_OF_INDEXES;  // set while the thread is in CrashFilter
 
 void WriteDump(EXCEPTION_POINTERS* ep, const char* why, DWORD thread) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
@@ -1079,31 +1120,33 @@ void WriteDump(EXCEPTION_POINTERS* ep, const char* why, DWORD thread) {
     Space s = Measure();
     Log("CRASH (%s): exception %08lX at %s+0x%lX in thread %lu; addresses: %.0f MB in use, largest free block %.0f MB",
         why, code, shortName, (DWORD)(addr - (BYTE*)mod), thread, s.usedMb, s.largestMb);
-    wchar_t dir[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, dir))) return;
-    wcscat_s(dir, L"\\The Creative Assembly\\Shogun2\\crash_dumps");
-    SHCreateDirectoryExW(nullptr, dir, nullptr);
+    std::wstring dir = g_dumpDir;
+    if (dir.empty()) {
+        wchar_t appData[MAX_PATH];
+        if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, appData))) return;
+        dir = std::wstring(appData) + L"\\The Creative Assembly\\Shogun2\\crash_dumps";
+    }
+    SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr);
     // keep the 9 newest older dumps
     std::vector<std::wstring> old;
     WIN32_FIND_DATAW fd;
-    wchar_t pattern[MAX_PATH];
-    swprintf_s(pattern, L"%ls\\shogun2_*.mdmp", dir);
-    HANDLE find = FindFirstFileW(pattern, &fd);
+    HANDLE find = FindFirstFileW((dir + L"\\shogun2_*.mdmp").c_str(), &fd);
     if (find != INVALID_HANDLE_VALUE) {
         do old.push_back(fd.cFileName);
         while (FindNextFileW(find, &fd));
         FindClose(find);
     }
     std::sort(old.begin(), old.end());
-    for (size_t i = 0; i + 9 < old.size(); ++i) DeleteFileW((std::wstring(dir) + L"\\" + old[i]).c_str());
+    for (size_t i = 0; i + 9 < old.size(); ++i) DeleteFileW((dir + L"\\" + old[i]).c_str());
     SYSTEMTIME t;
     GetLocalTime(&t);
-    wchar_t path[MAX_PATH];
-    swprintf_s(path, L"%ls\\shogun2_%04d%02d%02d_%02d%02d%02d.mdmp", dir, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute,
+    wchar_t name[48];
+    swprintf_s(name, L"\\shogun2_%04d%02d%02d_%02d%02d%02d.mdmp", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute,
                t.wSecond);
+    std::wstring path = dir + name;
     HMODULE dbghelp = LoadLibraryW(L"dbghelp.dll");
     auto write = dbghelp ? (decltype(&MiniDumpWriteDump))GetProcAddress(dbghelp, "MiniDumpWriteDump") : nullptr;
-    HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
     if (!write || f == INVALID_HANDLE_VALUE) {
         Log("crash dump: could not write %s", Utf8(path).c_str());
         if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
@@ -1147,13 +1190,21 @@ void Dump(EXCEPTION_POINTERS* ep, const char* why) {
 }
 
 LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
+    // A filter that took our place and calls the one it replaced ends up behind ours once StatsThread puts ours back in
+    // front: ours, that one, ours again (up to 0.5 round and round until the stack ran out). The second time on the same
+    // thread the exception goes on without us.
+    bool tls = g_filterTls != TLS_OUT_OF_INDEXES;
+    if (tls && TlsGetValue(g_filterTls)) return EXCEPTION_CONTINUE_SEARCH;
+    if (tls) TlsSetValue(g_filterTls, (LPVOID)1);
     Dump(ep, "unhandled");
     // the filter behind ours is usually the engine's, and the engine is unloaded before the process ends
     HMODULE m;
     bool loaded = g_nextFilter && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                                                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                                                      (LPCWSTR)g_nextFilter, &m);
-    return loaded ? g_nextFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
+    LONG r = loaded ? g_nextFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
+    if (tls) TlsSetValue(g_filterTls, nullptr);
+    return r;
 }
 
 // The engine (its C runtime) may install a filter later; it goes behind ours.
@@ -1186,6 +1237,10 @@ LONG WINAPI FirstChance(EXCEPTION_POINTERS* ep) {
 }
 
 void InstallCrashDumps() {
+    wchar_t dumpDir[1024];
+    DWORD n = GetEnvironmentVariableW(L"SHOGUN2_ENGINE_DUMP_DIR", dumpDir, 1024);
+    if (n > 0 && n < 1024) g_dumpDir = dumpDir;
+    g_filterTls = TlsAlloc();
     g_nextFilter = SetUnhandledExceptionFilter(&CrashFilter);
     BYTE** slot = (BYTE**)(g_base + kIatSetUnhandledExceptionFilter);
     void* hook = (void*)&HookSetFilter;
@@ -1202,8 +1257,8 @@ void InstallCrashDumps() {
         g_crashWriter = id;
         CloseHandle(writer);
     }
-    Log("crash dumps: on%s%s", iat ? "" : " (the engine's own filter calls are not chained)",
-        writer ? "" : " (no thread for stack overflows)");
+    Log("crash dumps: on%s%s%s%s", iat ? "" : " (the engine's own filter calls are not chained)",
+        writer ? "" : " (no thread for stack overflows)", g_dumpDir.empty() ? "" : ", to ", Utf8(g_dumpDir).c_str());
 }
 
 // ---------------------------------------------------------------- 8. loading screens without vsync
@@ -1366,16 +1421,13 @@ extern "C" void WINAPI EngineFixes_FrameStart(DWORD msAgo) {
     InterlockedExchange(&g_framePresents, 0);
 }
 
-BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved) {
+// No DisableThreadLibraryCalls: the static C runtime (/MT) needs the thread notifications (up to 0.5 it was called).
+BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
-        DisableThreadLibraryCalls(self);
         if (!GetModuleHandleW(L"empire.retail.dll")) return TRUE;  // another program in the game folder: only forward
         g_mainThread = GetCurrentThreadId();
-        GetModuleFileNameW(nullptr, g_dir, MAX_PATH);
-        if (wchar_t* slash = wcsrchr(g_dir, L'\\')) *slash = 0;
-        wchar_t log[MAX_PATH];
-        swprintf_s(log, L"%ls\\shogun2_engine.log", g_dir);
-        g_log = _wfsopen(log, L"w", _SH_DENYWR);
+        g_dir = ExeFolder();
+        if (!g_dir.empty()) g_log = _wfsopen((g_dir + L"\\shogun2_engine.log").c_str(), L"w", _SH_DENYWR);
         Log("Shogun 2 engine fixes %s (version.dll) loaded into %s", kVersion, Utf8(g_dir).c_str());
         ReadSettings();
         Install();

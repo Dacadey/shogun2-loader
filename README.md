@@ -1,13 +1,13 @@
 # Shogun 2 Loader
 
-Engine fixes for Total War: SHOGUN 2, as a `version.dll` that the game loads together with its engine. Battles,
-replays and campaigns load 2-3 times faster in DirectX 11 mode, the loading screen no longer waits for vsync, and the
-game's threads are no longer pinned to fixed cores. No game file is changed: delete `version.dll` and the game is
-exactly as before. It does not touch the rules, the AI or the saves.
+Engine fixes for Total War: SHOGUN 2, as a `version.dll` that the game loads together with its engine. In tests on two
+PCs, battles, replays and campaigns loaded 2-3 times faster in DirectX 11 mode. The loading screen no longer waits for
+vsync, and the game's threads are no longer pinned to fixed cores. No game file is changed: delete `version.dll` and
+the game is exactly as before. It does not touch the rules, the AI or the saves.
 
 **Download:** [Nexus Mods](https://www.nexusmods.com/totalwarshogun2/mods/28). How to install it and check that it
 works, the settings and the compatibility with other mods are in [package/README.txt](package/README.txt), the readme
-that comes with the download ([in Russian](package/README_RU.txt)).
+that comes with the download ([in Russian](package/README_RU.txt)). What changed: [CHANGELOG.md](CHANGELOG.md).
 
 ## What it does
 
@@ -25,7 +25,7 @@ that comes with the download ([in Russian](package/README_RU.txt)).
   with the main thread preferring the performance cores.
 - **Intro movies** (`skip_intro_movies`, off by default): straight to the main menu.
 - **Log and crash dumps.** `shogun2_engine.log` next to `shogun2.exe` has the settings, load times, frame rates and
-  the use of the 32-bit address space; when the game crashes, the DLL writes a minidump.
+  the use of the 32-bit address space; when the game crashes, the DLL tries to write a minidump.
 
 Every fix can be turned off in `shogun2_engine.ini`; see Settings in [package/README.txt](package/README.txt).
 
@@ -39,7 +39,7 @@ Every fix can be turned off in `shogun2_engine.ini`; see Settings in [package/RE
 | Game start to its first frame, intro movies skipped, same laptop | 41.5 s | 20.1 s |
 
 Both PCs: NVMe SSD, Windows 11, vsync on. On the first PC nine historical battles, a campaign and a campaign battle
-also loaded 2-3 times faster. Of that, the loading screen without vsync saved 1.4-3.4 s per load at 120 Hz and almost
+also loaded 2-3 times faster. Of that, the loading screen without vsync saved 1.3-3.4 s per load at 120 Hz and almost
 nothing at 240 Hz; 60 Hz has not been measured.
 
 ## How it works
@@ -49,12 +49,14 @@ with the engine, on the main thread, before any engine code runs. It loads the r
 system folder and forwards every function to it.
 
 The fixes change the engine's own code in memory, in a few places. They are made for one build of the engine:
-`empire.retail.dll` 1.1.0 of 12 May 2023, the current Steam version. The DLL checks the engine's time stamp and image
-size, and before each change it checks that the engine holds exactly the expected bytes there. With any other build it
-changes nothing, only forwards, and says so in its log. It hooks nothing in DirectX or in other programs.
+`empire.retail.dll` 1.1.0 of 12 May 2023, the current Steam version. The DLL tells the build by the engine's time stamp
+and image size, and before each change it checks that the engine holds exactly the expected bytes there. With another
+build it changes nothing, only forwards, and says so in its log. An engine file that another mod has edited but left
+with the same time stamp and size gets only the changes whose bytes still match; the log names the others. The DLL
+hooks nothing in DirectX or in other programs.
 
-Besides its log, the DLL writes only its settings file (when it is missing), the frame log if `frame_log=1`, and crash
-dumps to `%APPDATA%\The Creative Assembly\Shogun2\crash_dumps` (the 10 newest are kept).
+Besides its log, the DLL writes only its settings file (when it is missing), the frame log if `frame_log=1`, and, when
+the game crashes, a minidump to `%APPDATA%\The Creative Assembly\Shogun2\crash_dumps` (the 10 newest are kept).
 
 [engine/src/engine.cpp](engine/src/engine.cpp) is the whole DLL, with [exports.def](engine/src/exports.def). The
 engine's addresses are at its top, and each fix is a numbered section with a comment on what the engine does there
@@ -81,14 +83,23 @@ place, set `SHOGUN2_DIR` to its folder. Build `version.dll` first.
   game, runs the engine's own code through every changed place: the thread setup, the pack files, the intro movies,
   the per-frame call, and the present with and without an overlay that hooks it the way Steam's does. Then another
   build of the engine (left alone), the engine unloaded as at the end of the game, a stack overflow (logged, with a
-  minidump that the test deletes again), settings files written the way players write them, and a game folder with
-  Cyrillic letters. Under a minute.
-- `engine\test\tex_test.cmd` compares the textures of the fast path with those of D3DX, on a sample of the game's own
-  textures that `tools\dds_sample.py` picks from its .pack files. Needs Python 3 and the DirectX June 2010 runtime,
-  which the game installs. The first run, which picks the sample, takes several minutes.
+  minidump), settings files written the way players write them, a game folder with Cyrillic letters and one with a
+  path too long for the log's name. The test minidumps go to `engine\test\build\dumps`, not to the game's folder, and
+  are deleted again. Under a minute.
+- `engine\test\tex_test.cmd` first gives the fast path broken and forged .dds headers, which it has to leave to D3DX
+  without writing past its buffers or looping. Then it compares the textures of the fast path with those of D3DX, on a
+  sample of the game's own textures that `tools\dds_sample.py` picks from its .pack files. Needs Python 3 and the
+  DirectX June 2010 runtime, which the game installs. The first run, which picks the sample, takes several minutes.
 
 `tools\probe\topo_probe.cpp` runs the engine's CPU-topology and thread-pool code outside the game and prints which
 cores it pins the threads to.
+
+## Reporting a problem
+
+Open an issue with `shogun2_engine.log`, the game's graphics settings (DirectX 9 or 11, resolution, vsync), the CPU,
+the graphics card and the Windows version. The log lists file paths, which can show your Windows user name if the game
+is in your user folder: look it through before you post it. A crash dump holds a copy of the game's memory, so do not
+attach it to a public issue; say that you have one.
 
 ## License
 

@@ -1,5 +1,5 @@
-Shogun 2 Loader 0.5 - engine fixes for Total War: SHOGUN 2
-==========================================================
+Shogun 2 Loader 0.5.1 - engine fixes for Total War: SHOGUN 2
+============================================================
 
 A version.dll that the game loads together with its engine and that fixes a few things in it
 while it runs. No game file is changed: delete version.dll and the game is exactly as before.
@@ -13,17 +13,17 @@ What it does
 - The game starts faster, and going back from a battle to the menu is much quicker (5 times on
   the laptop below).
 - With vsync on, the loading screen no longer waits for the monitor on every redraw. How much
-  that saves depends on the monitor: 1.5-3.5 s per load at 60-120 Hz, almost nothing at 240 Hz.
-  The game itself keeps vsync as set.
+  that saves depends on the monitor: 1.3-3.4 s per load at 120 Hz, almost nothing at 240 Hz
+  (60 Hz has not been measured). The game itself keeps vsync as set.
 - The .pack files are read through the Windows file cache, so a second load of the same data
   comes from memory. On a fast NVMe drive this changes little.
 - The main thread and the worker threads are no longer pinned to fixed cores (the game pins the
   main thread to core 0 and each worker thread to a core of its own, the slow E-cores of new
-  Intel CPUs included). The frame rate in battle is no lower; on the laptop's hybrid CPU it was
-  5-10% higher.
+  Intel CPUs included). In our tests the frame rate in battle was no lower; on the laptop's
+  hybrid CPU it was 5-10% higher.
 - Optional: skips the intro movies (skip_intro_movies=1 in the settings).
-- Writes a log, shogun2_engine.log, with the load times and frame rates, and a crash dump if the
-  game crashes.
+- Writes a log, shogun2_engine.log, with the load times and frame rates, and when the game
+  crashes it tries to write a crash dump.
 
 Measured on two PCs:
 - Core i9-13900KF, RTX 4090, NVMe SSD, 4K at 120 Hz, Windows 11, vsync on: a battle replay
@@ -58,10 +58,11 @@ Install
 Check that it works
 -------------------
 1. Wait for the main menu. The game folder now has shogun2_engine.log (it is written anew at
-   every start). If it has not, the DLL was not loaded: check that version.dll lies right next
-   to shogun2.exe and not in a folder of its own. Open the log in Notepad. Near the top there
-   should be these lines (the times and numbers will differ):
-     Shogun 2 engine fixes 0.5 (version.dll) loaded into C:\...\Total War SHOGUN 2
+   every start). If it has not, the DLL was most likely not loaded (or it could not write in the
+   game folder): check that version.dll lies right next to shogun2.exe and not in a folder of
+   its own. Open the log in Notepad. Near the top there should be these lines (the times and
+   numbers will differ):
+     Shogun 2 engine fixes 0.5.1 (version.dll) loaded into C:\...\Total War SHOGUN 2
      settings: threads=free main_thread=pcores workers=any worker_count=0 pack_cache=1 ...
      threads: pool and main thread will be left unpinned
      pack_cache: on (no FILE_FLAG_NO_BUFFERING)
@@ -111,8 +112,8 @@ worker_count=0          worker threads, main thread included, from 0 to 64; 0 ke
                         choice.
 pack_cache=1            1: .pack files through the Windows file cache. 0: as the game does.
 texture_fast_path=1     1: textures straight from the files. 0: all through D3DX, as the game.
-loads_without_vsync=1   1: the loading screen does not wait for vsync (helps most at 60-120 Hz).
-                        0: as the game does.
+loads_without_vsync=1   1: the loading screen does not wait for vsync (1.3-3.4 s per load at
+                        120 Hz). 0: as the game does.
 skip_intro_movies=0     1: straight to the main menu, without the intro movies.
 frame_log=0             1: also writes shogun2_frames.csv (the time of every frame), for
                         diagnostics: about 15 MB an hour at 240 fps; written anew at every start.
@@ -137,8 +138,10 @@ Compatibility
   known; tested with two such mods for a 4K interface. ReShade has not been tested.
 - Not together with another mod that also brings a version.dll (some plugin and ASI loaders use
   that name): only one file of that name fits in the game folder.
-- A modified empire.retail.dll, or another version of the game: the DLL notices it, changes
-  nothing and says so in its log; the game runs as without it.
+- Another version of the game (another build of empire.retail.dll): the DLL notices it, changes
+  nothing and says so in its log; the game runs as without it. If another mod has edited
+  empire.retail.dll but left its build stamp and size as they were, the DLL makes only the
+  changes whose code is still exactly as it expects, and logs the others as left alone.
 - Overlays and recording: the Steam overlay and NVIDIA's capture are tested, switching between
   window and full screen included. Discord, OBS and MSI Afterburner/RTSS have not been tested;
   the DLL hooks nothing in DirectX, only the engine's own code, so no conflict is expected.
@@ -157,7 +160,7 @@ Known limits
   graphics have not been tested.
 - Some antivirus programs may distrust an unsigned DLL that changes a game's code in memory.
   The SHA-256 of version.dll in this package:
-  481cdf87955a653020489aea231842fe9fe44134afdb3a9b2989a83350f3e16a
+  5fd872672271e5744d7f5e420f2be567204eddbef0610e1b0d206c0d33df1e29
 - Windows 11 Smart App Control has not been tested. When it is on, Windows may refuse to load an
   unsigned DLL; the game then does not start at all, as the engine loads version.dll together
   with itself. Delete version.dll, and the game starts as before.
@@ -166,5 +169,8 @@ Reporting a problem
 -------------------
 Send shogun2_engine.log (and the crash dump, if there is one), the game's graphics settings
 (DirectX 9 or 11, resolution, vsync), the CPU, the graphics card and the Windows version.
+The log lists file paths, which can show your Windows user name (if the game is in your user
+folder): look it through before you post it in public. A crash dump holds a copy of the game's
+memory: send it privately rather than in a public post.
 
-Version 0.5 (test build), 2026-10-23.
+Version 0.5.1 (test build), 2026-10-24.

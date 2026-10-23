@@ -4,7 +4,10 @@
 // files are also tried wrapped in a DX10 header, which is how the engine hands most textures over at run time, and
 // with the top mip level skipped (lower texture quality), with and without the size given. Then it reads both back
 // and compares every mip level, decoding BC1/BC2/BC3 blocks to pixels. A different size, mip count or format is a
-// problem; different pixels are not (D3DX re-encodes the blocks, the fast path keeps the file's own).
+// problem; different pixels are not (D3DX re-encodes the blocks, the fast path keeps the file's own). A texture that
+// cannot be read back is a problem too, and so is a sample of which the fast path made nothing.
+// Before that, broken and forged headers made up here: the fast path has to leave each to D3DX, without writing past
+// its buffers or looping (up to 0.5 such headers could make it do both), while a good file still goes through it.
 //
 //   tex_test.exe <folder> <version.dll>
 #define NOMINMAX
@@ -146,6 +149,83 @@ static std::vector<BYTE> WrapDx10(const std::vector<BYTE> &d, DXGI_FORMAT f) {
     return out;
 }
 
+// A .dds file made up here: the header fields given and zeroes elsewhere, then `data` bytes of pixels. fourcc 0 means
+// 32-bit BGRA given by bit masks.
+static std::vector<BYTE> MakeDds(UINT w, UINT h, UINT mips, DWORD fourcc, size_t data, const DWORD *dx10 = nullptr) {
+    size_t head = dx10 ? 148 : 128;
+    std::vector<BYTE> d(head + data, 0x55);
+    std::fill(d.begin(), d.begin() + head, (BYTE)0);
+    auto put = [&](size_t at, DWORD v) { memcpy(&d[at], &v, 4); };
+    memcpy(d.data(), "DDS ", 4);
+    put(4, 124);
+    put(8, 0x1007 | (mips > 1 ? 0x20000u : 0u));  // CAPS | HEIGHT | WIDTH | PIXELFORMAT, MIPMAPCOUNT
+    put(12, h), put(16, w), put(28, mips), put(76, 32), put(108, 0x1000);  // pixel format size, DDSCAPS_TEXTURE
+    if (fourcc)
+        put(80, 4), put(84, fourcc);  // DDPF_FOURCC
+    else
+        put(80, 0x41), put(88, 32), put(92, 0xFF0000), put(96, 0xFF00), put(100, 0xFF), put(104, 0xFF000000);
+    if (dx10) memcpy(&d[128], dx10, 20);
+    return d;
+}
+
+struct BrokenRun {
+    ID3D11Device *dev;
+    FastFn fast;
+    int problems = 0;
+};
+
+// Each case must be left to D3DX (S_FALSE) and leave the heap whole, except the good file, which the fast path makes.
+static DWORD WINAPI BrokenHeaders(void *arg) {
+    BrokenRun &r = *(BrokenRun *)arg;
+    const DWORD bc1 = MAKEFOURCC('D', 'X', 'T', '1'), dx10 = MAKEFOURCC('D', 'X', '1', '0');
+    const DWORD wrapsArray[5] = {DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_RESOURCE_DIMENSION_TEXTURE2D, 0, 0x80000001, 0};
+    const DWORD wrapsCubes[5] = {DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_RESOURCE_DIMENSION_TEXTURE2D,
+                                 D3D11_RESOURCE_MISC_TEXTURECUBE, 0x2AAAAAAB, 0};
+    const DWORD tooManySlices[5] = {DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_RESOURCE_DIMENSION_TEXTURE2D, 0, 2049, 0};
+    struct Case {
+        const char *what;
+        std::vector<BYTE> file;
+        DXGI_FORMAT format;
+        bool made;
+    };
+    const Case cases[] = {
+        {"a good 4x4 BC1 file", MakeDds(4, 4, 1, bc1, 8), DXGI_FORMAT_BC1_UNORM_SRGB, true},
+        // with data for 200 slices of 2x2 and 1x1: up to 0.5 the table of 2 entries got 400
+        {"0x80000001 slices (times the mip count wraps around)", MakeDds(2, 2, 2, dx10, 200 * 20, wrapsArray),
+         DXGI_FORMAT_R8G8B8A8_UNORM, false},
+        {"0x2AAAAAAB cubes (times 6 wraps around)", MakeDds(2, 2, 1, dx10, 12 * 16, wrapsCubes),
+         DXGI_FORMAT_R8G8B8A8_UNORM, false},
+        {"2049 slices (D3D11 takes 2048)", MakeDds(2, 2, 1, dx10, 2049 * 16, tooManySlices),
+         DXGI_FORMAT_R8G8B8A8_UNORM, false},
+        {"width 2^31 (up to 0.5 the mip count loop never ended)", MakeDds(0x80000000u, 4, 1, bc1, 64),
+         DXGI_FORMAT_BC1_UNORM_SRGB, false},
+        {"height 2^31", MakeDds(4, 0x80000000u, 1, bc1, 64), DXGI_FORMAT_BC1_UNORM_SRGB, false},
+        {"width 2^30 of 4-byte pixels (the row size wraps around)", MakeDds(0x40000000u, 1, 1, 0, 64),
+         DXGI_FORMAT_B8G8R8A8_UNORM, false},
+        {"width 16385 (D3D11 takes 16384)", MakeDds(16385, 4, 1, bc1, 4097 * 8), DXGI_FORMAT_BC1_UNORM_SRGB, false},
+        {"width 0", MakeDds(0, 4, 1, bc1, 8), DXGI_FORMAT_BC1_UNORM_SRGB, false},
+        {"256x256 BC1 with half its data", MakeDds(256, 256, 1, bc1, 64 * 64 * 8 / 2), DXGI_FORMAT_BC1_UNORM_SRGB, false},
+    };
+    for (const Case &c : cases) {
+        UINT w = *(const DWORD *)&c.file[16], h = *(const DWORD *)&c.file[12];
+        LoadInfo li = {w, h, 0xFFFFFFFF, 0, 0, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0, (UINT)c.format,
+                       0x600001, 0x600001, nullptr};
+        printf("  %-62s ", c.what);
+        fflush(stdout);
+        ID3D11Resource *t = nullptr;
+        HRESULT hr = r.fast(r.dev, c.file.data(), c.file.size(), &li, (void **)&t);
+        bool made = hr == S_OK && t, whole = HeapValidate(GetProcessHeap(), 0, nullptr) != FALSE;
+        if (t) t->Release();
+        if (made == c.made && whole) {
+            printf("ok (%s)\n", made ? "made" : "left to D3DX");
+        } else {
+            printf("FAILED (%s%s)\n", made ? "made" : "left to D3DX", whole ? "" : ", the heap is damaged");
+            r.problems++;
+        }
+    }
+    return 0;
+}
+
 struct Stat {
     int files = 0, fast = 0, same = 0;
     double d3dxMs = 0, fastMs = 0, sumDiff = 0;
@@ -185,6 +265,20 @@ int main(int argc, char **argv) {
     }
     std::sort(files.begin(), files.end());
     int problems = 0;
+    printf("broken and forged headers:\n");
+    BrokenRun run = {dev, fast};
+    HANDLE thread = CreateThread(nullptr, 0, &BrokenHeaders, &run, 0, nullptr);
+    if (!thread || WaitForSingleObject(thread, 30000) != WAIT_OBJECT_0) {
+        printf("\nFAILED: the fast path did not come back within 30 s\n");
+        fflush(stdout);
+        TerminateProcess(GetCurrentProcess(), 1);
+    }
+    CloseHandle(thread);
+    problems += run.problems;
+    if (files.empty()) {
+        printf("no .dds files under %s\n", argv[1]);
+        return 1;
+    }
     for (auto &path : files) {
         FILE *f = fopen(path.c_str(), "rb");
         std::vector<BYTE> data;
@@ -242,7 +336,10 @@ int main(int argc, char **argv) {
             }
             D3D11_TEXTURE2D_DESC da, db;
             ID3D11Texture2D *sa = Staging(dev, ctx, a, da), *sb = Staging(dev, ctx, b, db);
-            if (da.Width != db.Width || da.Height != db.Height || da.MipLevels != db.MipLevels ||
+            if (!sa || !sb) {
+                printf("could not copy the textures of %s for reading\n", path.c_str());
+                problems++;
+            } else if (da.Width != db.Width || da.Height != db.Height || da.MipLevels != db.MipLevels ||
                 da.ArraySize != db.ArraySize || da.Format != db.Format) {
                 printf("different texture: %s: d3dx %ux%u m%u a%u f%d, fast %ux%u m%u a%u f%d\n", path.c_str(),
                        da.Width, da.Height, da.MipLevels, da.ArraySize, da.Format, db.Width, db.Height, db.MipLevels,
@@ -255,6 +352,12 @@ int main(int argc, char **argv) {
                         UINT w = std::max(1u, da.Width >> mip), h = std::max(1u, da.Height >> mip);
                         UINT sub = D3D11CalcSubresource(mip, slice, da.MipLevels);
                         auto pa = Pixels(ctx, sa, sub, w, h, da.Format), pb = Pixels(ctx, sb, sub, w, h, db.Format);
+                        if (pa.empty() || pb.empty()) {
+                            printf("could not read mip %u of %s back\n", mip, path.c_str());
+                            problems++;
+                            same = false;
+                            continue;
+                        }
                         int shownHere = 0;
                         for (size_t i = 0; i < pa.size() && i < pb.size(); i++) {
                             int diff = abs((int)pa[i] - (int)pb[i]);
@@ -270,8 +373,16 @@ int main(int argc, char **argv) {
                     }
                 s.same += same;
             }
-            sa->Release(), sb->Release(), a->Release(), b->Release();
+            if (sa) sa->Release();
+            if (sb) sb->Release();
+            a->Release(), b->Release();
         }
+    }
+    int compared = 0;
+    for (auto &kv : stats) compared += kv.second.fast;
+    if (!compared) {
+        printf("the fast path made none of the sample's textures: nothing was compared\n");
+        problems++;
     }
     printf("%-44s %5s %5s %5s %10s %10s %8s %8s\n", "kind", "files", "fast", "same", "d3dx ms", "fast ms", "max diff",
            "mean");

@@ -4,3 +4,10 @@
 /tools/probe/*.exe
 /tools/probe/*.obj
 __pycache__/
+
+# A run's log, frame log and crash dumps (they hold paths and memory), should one land here
+*.log
+*.mdmp
+*.dmp
+*.pdb
+shogun2_frames.csv
