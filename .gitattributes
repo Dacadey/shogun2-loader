@@ -1,0 +1,4 @@
+* text=auto
+*.cmd text eol=crlf
+# The files of the download, byte for byte as they are in it
+package/* -text

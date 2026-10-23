@@ -1,0 +1,6 @@
+# Built from the sources here (the tests also copy the game's engine into engine/test/build/input)
+/engine/build/
+/engine/test/build/
+/tools/probe/*.exe
+/tools/probe/*.obj
+__pycache__/
