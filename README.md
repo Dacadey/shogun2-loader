@@ -1,13 +1,17 @@
 # Shogun 2 Loader
 
-Engine fixes for Total War: SHOGUN 2, as a `version.dll` that the game loads together with its engine. In tests on two
-PCs, battles, replays and campaigns loaded 2-3 times faster in DirectX 11 mode. The loading screen no longer waits for
-vsync, and the game's threads are no longer pinned to fixed cores. No game file is changed: delete `version.dll` and
-the game is exactly as before. It does not touch the rules, the AI or the saves.
+Engine fixes for Total War: SHOGUN 2: a DLL that the game loads together with its engine, as `version.dll` or as an
+ASI plugin for Ultimate ASI Loader. In tests on two PCs, battles, replays and campaigns loaded 2-3 times faster in
+DirectX 11 mode. The loading screen no longer waits for vsync, and the game's threads are no longer pinned to fixed
+cores. No game file is changed: delete the DLL and the game is exactly as before. It does not touch the rules, the AI or
+the saves.
 
-**Download:** [Nexus Mods](https://www.nexusmods.com/totalwarshogun2/mods/28). How to install it and check that it
-works, the settings and the compatibility with other mods are in [package/README.txt](package/README.txt), the readme
-that comes with the download ([in Russian](package/README_RU.txt)). What changed: [CHANGELOG.md](CHANGELOG.md).
+**Download:** [Nexus Mods](https://www.nexusmods.com/totalwarshogun2/mods/28), as two files with the same DLL in them:
+`Shogun2Loader-<version>.zip` has it as `version.dll`, for most players; `Shogun2Loader-<version>-ASI.zip` has it as
+`plugins\shogun2_engine.asi`, for players who use [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)
+(for SharpFonts and other .asi mods, or because another mod has its own `version.dll`). How to install it and check
+that it works, the settings and the compatibility with other mods are in [package/README.txt](package/README.txt), the
+readme that comes with the download ([in Russian](package/README_RU.txt)). What changed: [CHANGELOG.md](CHANGELOG.md).
 
 ## What it does
 
@@ -48,6 +52,11 @@ nothing at 240 Hz; 60 Hz has not been measured.
 with the engine, on the main thread, before any engine code runs. It loads the real `version.dll` from the Windows
 system folder and forwards every function to it.
 
+As an ASI plugin the same file is loaded by Ultimate ASI Loader, which, when the game is started from Steam, loads its
+plugins before the engine: the Steam overlay imports `winmm.dll` and brings the loader in at start. The DLL then has
+Windows tell it when the engine is loaded and comes in at the engine's entry point, right before the engine's own
+start-up code, the same point as `version.dll`. The first line of the log names the file it was loaded as.
+
 The fixes change the engine's own code in memory, in a few places. They are made for one build of the engine:
 `empire.retail.dll` 1.1.0 of 12 May 2023, the current Steam version. The DLL tells the build by the engine's time stamp
 and image size, and before each change it checks that the engine holds exactly the expected bytes there. With another
@@ -84,8 +93,9 @@ place, set `SHOGUN2_DIR` to its folder. Build `version.dll` first.
   the per-frame call, and the present with and without an overlay that hooks it the way Steam's does. Then another
   build of the engine (left alone), the engine unloaded as at the end of the game, a stack overflow (logged, with a
   minidump), settings files written the way players write them, a game folder with Cyrillic letters and one with a
-  path too long for the log's name. The test minidumps go to `engine\test\build\dumps`, not to the game's folder, and
-  are deleted again. Under a minute.
+  path too long for the log's name, and the DLL as an ASI plugin loaded before the engine (every check of the first
+  run again). The test minidumps go to `engine\test\build\dumps`, not to the game's folder, and are deleted again.
+  About a minute.
 - `engine\test\tex_test.cmd` first gives the fast path broken and forged .dds headers, which it has to leave to D3DX
   without writing past its buffers or looping. Then it compares the textures of the fast path with those of D3DX, on a
   sample of the game's own textures that `tools\dds_sample.py` picks from its .pack files. Needs Python 3 and the

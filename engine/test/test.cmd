@@ -5,7 +5,8 @@ rem like Steam's among them), then an engine of another build (left alone), load
 rem left as it is), the engine unloaded as at the end of the game (version.dll has to stay; 31 s), the main thread out
 rem of stack (logged, with a minidump), eleven inis as players may write them (the settings line and the "ini:" lines
 rem version.dll logs), a game folder with Cyrillic letters (its name in the log, in UTF-8), and one whose path is too
-rem long for the log's name to fit in MAX_PATH (the engine still has to load).
+rem long for the log's name to fit in MAX_PATH (the engine still has to load), and the DLL as an ASI plugin loaded
+rem before the engine (all the checks of the first run again).
 rem The game folder is only read: SHOGUN2_DIR, by default Steam's usual one (the Steam version 1.1.0 of the game). The
 rem minidumps of the tests go to build\dumps (SHOGUN2_ENGINE_DUMP_DIR), not to the game's crash_dumps folder.
 rem Extra arguments go to the first run:
@@ -69,6 +70,10 @@ if %errorlevel% neq 0 set FAILED=1
 echo.
 echo ==== a game folder with a long path
 build\hooks_test.exe "%INPUT%" "%PACK%" --long-folder
+if %errorlevel% neq 0 set FAILED=1
+echo.
+echo ==== the DLL as an ASI plugin, loaded before the engine
+build\hooks_test.exe "%INPUT%" "%PACK%" --asi-plugin
 if %errorlevel% neq 0 set FAILED=1
 echo.
 popd

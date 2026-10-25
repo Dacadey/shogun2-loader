@@ -7,6 +7,10 @@
 // exactly the expected code before changing it. In any other process (the game folder also holds
 // AwesomiumProcess.exe, cef_process.exe and chromiumcapsule.retail.exe) the DLL only forwards.
 //
+// The same file also works as an ASI plugin (plugins\shogun2_engine.asi with Ultimate ASI Loader as winmm.dll). Such a
+// loader may load it before the engine; it then waits and comes in at the engine's entry point, right before the
+// engine's own start-up code, the same point as version.dll (see "start" at the end).
+//
 // Settings (shogun2_engine.ini next to shogun2.exe, written with defaults on first run), section [engine]:
 //   threads=free          free: neither the main thread nor the worker pool is pinned to a core, so Windows can put
 //                         them on whichever core is free and fastest. engine: as the game does it (main thread pinned
@@ -55,7 +59,7 @@
 
 namespace {
 
-const char kVersion[] = "0.5.1";  // in the first line of the log; the package's README carries the same number
+const char kVersion[] = "0.5.2";  // in the first line of the log; the package's README carries the same number
 
 // ---------------------------------------------------------------- empire.retail.dll 1.1.0 (RVAs, base 0x10000000)
 const DWORD kPoolSetupCall = 0x9D485;     // engine start: call <pool setup> (thiscall (number_of_threads, pin), ret 8)
@@ -1367,6 +1371,94 @@ void Install() {
     if (g_memoryLog || g_crashDumps) CloseHandle(CreateThread(nullptr, 0, &StatsThread, nullptr, 0, nullptr));
 }
 
+// ---------------------------------------------------------------- start
+//
+// As version.dll the DLL is an import of empire.retail.dll: Windows loads it with the engine and runs it before the
+// engine's own start-up code, with the engine's imports filled in and none of its code run yet. An ASI loader can load
+// it before the engine instead: Ultimate ASI Loader as winmm.dll comes in when the game starts, because the Steam
+// overlay imports winmm.dll, and loads plugins\*.asi at once, before shogun2.exe loads empire.retail.dll (checked
+// 2026-10-25: up to 0.5.1 the DLL then saw no engine and only forwarded). Loaded that early, it has Windows tell it
+// about every DLL loaded. When the engine has been mapped (its imports not filled in yet, so too early to patch), a
+// jump at its entry point brings this DLL in right before the engine's start-up code, the same point as version.dll.
+
+std::wstring g_selfName;  // the file name this DLL was loaded as: version.dll, shogun2_engine.asi or the like
+SYSTEMTIME g_earlyAt;     // when it was loaded before the engine (wYear 0: it was not)
+bool g_started;
+BYTE* g_engineEntry;  // the engine's entry point, once the jump to EngineEntry is in it
+BYTE g_entryCode[5];  // the engine's own first bytes there
+void* g_notifyCookie;
+
+void Start() {
+    g_started = true;
+    g_mainThread = GetCurrentThreadId();
+    g_dir = ExeFolder();
+    if (!g_dir.empty()) g_log = _wfsopen((g_dir + L"\\shogun2_engine.log").c_str(), L"w", _SH_DENYWR);
+    Log("Shogun 2 engine fixes %s (%s) loaded into %s", kVersion, Utf8(g_selfName).c_str(), Utf8(g_dir).c_str());
+    if (g_earlyAt.wYear)
+        Log("%s was loaded at %02d:%02d:%02d.%03d, before empire.retail.dll (an ASI loader does that): it came in at the "
+            "engine's entry point", Utf8(g_selfName).c_str(), g_earlyAt.wHour, g_earlyAt.wMinute, g_earlyAt.wSecond,
+            g_earlyAt.wMilliseconds);
+    ReadSettings();
+    Install();
+}
+
+// Jumped to from the engine's entry point, with its arguments: puts the engine's first bytes back, starts this DLL and
+// runs the engine's start-up code as Windows meant to (the loader calls it once, on this thread).
+BOOL WINAPI EngineEntry(HINSTANCE engine, DWORD reason, LPVOID reserved) {
+    BYTE* entry = g_engineEntry;
+    WriteCode(entry, g_entryCode, sizeof g_entryCode);
+    if (reason == DLL_PROCESS_ATTACH && !g_started) Start();
+    return ((BOOL(WINAPI*)(HINSTANCE, DWORD, LPVOID))entry)(engine, reason, reserved);
+}
+
+struct NtString {
+    USHORT length, maximumLength;  // in bytes
+    const wchar_t* buffer;
+};
+struct DllNotification {  // LDR_DLL_NOTIFICATION_DATA (the same for a DLL loaded and unloaded)
+    ULONG flags;
+    const NtString* fullName;
+    const NtString* baseName;
+    BYTE* base;
+    ULONG size;
+};
+
+// Called by Windows for every DLL loaded or unloaded, with the loader's lock held.
+void CALLBACK OnDllNotification(ULONG reason, const DllNotification* d, void*) {
+    const ULONG kLoaded = 1;
+    if (reason != kLoaded || g_started || g_engineEntry || d->baseName->length != 17 * sizeof(wchar_t) ||
+        _wcsnicmp(d->baseName->buffer, L"empire.retail.dll", 17) != 0)
+        return;
+    auto* nt = (IMAGE_NT_HEADERS32*)(d->base + ((IMAGE_DOS_HEADER*)d->base)->e_lfanew);
+    BYTE* entry = d->base + nt->OptionalHeader.AddressOfEntryPoint;
+    // push ebp; mov ebp,esp; cmp dword ptr [ebp+0Ch],1: the start of the engine's _DllMainCRTStartup, no relocations in it
+    const BYTE kStartup[5] = {0x55, 0x8B, 0xEC, 0x83, 0x7D};
+    if (memcmp(entry, kStartup, sizeof kStartup) != 0) return;  // not the code it was made for: the DLL stays out
+    BYTE jump[5] = {0xE9};
+    *(int*)(jump + 1) = (int)((BYTE*)&EngineEntry - (entry + 5));
+    memcpy(g_entryCode, entry, sizeof g_entryCode);
+    if (WriteCode(entry, jump, sizeof jump)) g_engineEntry = entry;
+}
+
+// Loaded with no engine in the process: another program in the game folder, where the engine never comes and the DLL
+// only forwards, or an ASI loader at the game's start, where it comes a little later.
+void WaitForEngine() {
+    typedef LONG(NTAPI * RegisterFn)(ULONG, void(CALLBACK*)(ULONG, const DllNotification*, void*), void*, void**);
+    auto reg = (RegisterFn)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "LdrRegisterDllNotification");
+    if (reg && reg(0, &OnDllNotification, nullptr, &g_notifyCookie) == 0) GetLocalTime(&g_earlyAt);
+}
+
+// In lower case: loaded as the engine's import the file is VERSION.dll, as the engine spells it.
+std::wstring FileName(HMODULE module) {
+    wchar_t path[MAX_PATH];
+    DWORD n = GetModuleFileNameW(module, path, MAX_PATH);
+    std::wstring s(path, n < MAX_PATH ? n : 0);
+    size_t slash = s.rfind(L'\\');
+    if (slash != std::wstring::npos) s = s.substr(slash + 1);
+    for (wchar_t& c : s) c = towlower(c);
+    return s;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- forwarded exports
@@ -1422,15 +1514,17 @@ extern "C" void WINAPI EngineFixes_FrameStart(DWORD msAgo) {
 }
 
 // No DisableThreadLibraryCalls: the static C runtime (/MT) needs the thread notifications (up to 0.5 it was called).
-BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID reserved) {
+BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
-        if (!GetModuleHandleW(L"empire.retail.dll")) return TRUE;  // another program in the game folder: only forward
-        g_mainThread = GetCurrentThreadId();
-        g_dir = ExeFolder();
-        if (!g_dir.empty()) g_log = _wfsopen((g_dir + L"\\shogun2_engine.log").c_str(), L"w", _SH_DENYWR);
-        Log("Shogun 2 engine fixes %s (version.dll) loaded into %s", kVersion, Utf8(g_dir).c_str());
-        ReadSettings();
-        Install();
+        g_selfName = FileName(self);
+        if (GetModuleHandleW(L"empire.retail.dll"))
+            Start();  // loaded with the engine, as its version.dll (or by a loader the engine itself loaded)
+        else
+            WaitForEngine();
+    } else if (reason == DLL_PROCESS_DETACH && !reserved && g_notifyCookie && !g_started) {
+        // unloaded (FreeLibrary) before any engine came: Windows must not call OnDllNotification any more
+        auto unreg = (LONG(NTAPI*)(void*))GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "LdrUnregisterDllNotification");
+        if (unreg) unreg(g_notifyCookie);
     } else if (reason == DLL_PROCESS_DETACH && g_log) {
         // Pinned, the DLL is only told when the process ends; its other threads are gone by then, so no waiting for a
         // lock one of them may have held.

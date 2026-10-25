@@ -1,9 +1,19 @@
-Shogun 2 Loader 0.5.1 - engine fixes for Total War: SHOGUN 2
+Shogun 2 Loader 0.5.2 - engine fixes for Total War: SHOGUN 2
 ============================================================
 
-A version.dll that the game loads together with its engine and that fixes a few things in it
-while it runs. No game file is changed: delete version.dll and the game is exactly as before.
+A small DLL that the game loads together with its engine and that fixes a few things in it
+while it runs. No game file is changed: delete the DLL and the game is exactly as before.
 It does not touch the rules, the AI or the saves.
+
+Which download do I need?
+-------------------------
+The mod comes as two downloads with the same DLL in them. Install one of them, not both.
+- Shogun2Loader-0.5.2.zip, the DLL as version.dll: for most players. Nothing else is needed.
+- Shogun2Loader-0.5.2-ASI.zip, the DLL as an ASI plugin (plugins\shogun2_engine.asi): only if
+  you use Ultimate ASI Loader, for example for SharpFonts or other .asi mods, or if another mod
+  already has its own version.dll in the game folder. Ultimate ASI Loader is not included; get
+  it from https://github.com/ThirteenAG/Ultimate-ASI-Loader
+In the game the two work the same.
 
 What it does
 ------------
@@ -40,7 +50,8 @@ Requirements
   game the DLL changes nothing and says so in its log.
 - DirectX 11 mode (the game's default on DirectX 11 graphics cards). In DirectX 9 mode the game
   runs with the DLL too, but the texture and vsync fixes do not apply.
-- Windows 10 or 11. Nothing else needs to be installed.
+- Windows 10 or 11. Nothing else needs to be installed (for the ASI download: Ultimate ASI
+  Loader).
 
 Install
 -------
@@ -48,11 +59,14 @@ Install
 2. Open the game's folder: in Steam, Library -> right-click Total War: SHOGUN 2 -> Manage ->
    Browse local files. It is the folder with shogun2.exe and empire.retail.dll, usually
    C:\Program Files (x86)\Steam\steamapps\common\Total War SHOGUN 2
-3. Open the "Copy to game folder" folder of this package and copy the two files in it,
-   version.dll and shogun2_engine.ini, into the game's folder: the files themselves, not the
-   folder, so that version.dll lies right next to shogun2.exe.
-   If the game folder already has a version.dll (from another mod), stop: the two mods cannot be
-   installed together (see Compatibility).
+3. Open the "Copy to game folder" folder of the download and copy what is in it into the game's
+   folder: its contents, not the folder itself.
+   - version.dll download: version.dll and shogun2_engine.ini, so that version.dll lies right
+     next to shogun2.exe. If the game folder already has a version.dll from another mod, stop
+     and take the ASI download instead (see Compatibility).
+   - ASI download: the plugins folder with shogun2_engine.asi in it, and shogun2_engine.ini.
+     Ultimate ASI Loader has to be in the game folder already; we tested it installed as
+     winmm.dll (version 10.0.0).
 4. Start the game from Steam as usual.
 
 Check that it works
@@ -60,9 +74,10 @@ Check that it works
 1. Wait for the main menu. The game folder now has shogun2_engine.log (it is written anew at
    every start). If it has not, the DLL was most likely not loaded (or it could not write in the
    game folder): check that version.dll lies right next to shogun2.exe and not in a folder of
-   its own. Open the log in Notepad. Near the top there should be these lines (the times and
-   numbers will differ):
-     Shogun 2 engine fixes 0.5.1 (version.dll) loaded into C:\...\Total War SHOGUN 2
+   its own, or, with the ASI download, that Ultimate ASI Loader is installed and
+   shogun2_engine.asi is in the plugins folder. Open the log in Notepad. Near the top there
+   should be these lines (the times and numbers will differ):
+     Shogun 2 engine fixes 0.5.2 (version.dll) loaded into C:\...\Total War SHOGUN 2
      settings: threads=free main_thread=pcores workers=any worker_count=0 pack_cache=1 ...
      threads: pool and main thread will be left unpinned
      pack_cache: on (no FILE_FLAG_NO_BUFFERING)
@@ -70,6 +85,8 @@ Check that it works
      textures: fast path on (files that already hold the asked-for format skip D3DX)
      loads_without_vsync: on (loading screens are presented without vsync)
      first frame: 15.5 s after the process started
+   With the ASI download the first line names shogun2_engine.asi instead, and the next one says
+   that it was loaded before empire.retail.dll and came in at the engine's entry point.
    If there is a line "empire.retail.dll is build ...: nothing is changed, version.dll only
    forwards", this version of the game is not supported, and the game runs as without the mod.
    Lines starting with "ini:" right under "settings:" mean that something in shogun2_engine.ini
@@ -136,8 +153,12 @@ Compatibility
   round.
 - Other mods that are DLLs in the game folder (dinput8.dll, d3d11.dll, dxgi.dll): no conflict is
   known; tested with two such mods for a 4K interface. ReShade has not been tested.
-- Not together with another mod that also brings a version.dll (some plugin and ASI loaders use
-  that name): only one file of that name fits in the game folder.
+- Another mod that also brings a version.dll (some plugin loaders use that name): only one file
+  of that name fits in the game folder, so take the ASI download, with Ultimate ASI Loader.
+- Ultimate ASI Loader and .asi mods: take the ASI download. Tested with Ultimate ASI Loader
+  10.0.0 as winmm.dll and the game started from Steam; SharpFonts has not been tested. Install
+  only one of the two downloads: with both, the DLL is loaded twice, and the second copy finds
+  the fixes already made and leaves them.
 - Another version of the game (another build of empire.retail.dll): the DLL notices it, changes
   nothing and says so in its log; the game runs as without it. If another mod has edited
   empire.retail.dll but left its build stamp and size as they were, the DLL makes only the
@@ -151,16 +172,16 @@ Compatibility
 
 Uninstall
 ---------
-Delete version.dll, shogun2_engine.ini, shogun2_engine.log and, if present, shogun2_frames.csv
-from the game folder.
+Delete version.dll (or, with the ASI download, plugins\shogun2_engine.asi), shogun2_engine.ini,
+shogun2_engine.log and, if present, shogun2_frames.csv from the game folder.
 
 Known limits
 ------------
 - Tested on two PCs (above), both with the Steam version and NVIDIA graphics; AMD and Intel
   graphics have not been tested.
 - Some antivirus programs may distrust an unsigned DLL that changes a game's code in memory.
-  The SHA-256 of version.dll in this package:
-  5fd872672271e5744d7f5e420f2be567204eddbef0610e1b0d206c0d33df1e29
+  The SHA-256 of the DLL, the same file in both downloads (version.dll and shogun2_engine.asi):
+  12b3b76114fdb4268673accf4b45fc0066467de072a10ef56957ffe43d8d9e16
 - Windows 11 Smart App Control has not been tested. When it is on, Windows may refuse to load an
   unsigned DLL; the game then does not start at all, as the engine loads version.dll together
   with itself. Delete version.dll, and the game starts as before.
@@ -173,4 +194,4 @@ The log lists file paths, which can show your Windows user name (if the game is 
 folder): look it through before you post it in public. A crash dump holds a copy of the game's
 memory: send it privately rather than in a public post.
 
-Version 0.5.1 (test build), 2026-10-24.
+Version 0.5.2 (test build), 2026-10-25.

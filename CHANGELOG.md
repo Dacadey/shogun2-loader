@@ -1,5 +1,16 @@
 # Changes
 
+## 0.5.2 (2026-10-25)
+
+- Works as an ASI plugin too. A second download, `Shogun2Loader-0.5.2-ASI.zip`, has the same DLL as
+  `plugins\shogun2_engine.asi`, for players who use Ultimate ASI Loader (for SharpFonts and other .asi mods) or have
+  another mod's `version.dll` in the game folder. Up to 0.5.1 such a plugin stayed off when the game was started from
+  Steam: the loader loads its plugins before the game's engine (the Steam overlay brings it in at start), and the DLL
+  saw no engine. Now it waits for the engine and comes in right before the engine starts, as `version.dll` does.
+  Tested in the game with Ultimate ASI Loader 10.0.0 as `winmm.dll`.
+- The first line of the log names the file the DLL was loaded as: `version.dll` or `shogun2_engine.asi`.
+- Tests: a run with the DLL loaded before the engine, as an ASI loader does (0.5.1 fails it).
+
 ## 0.5.1 (2026-10-24)
 
 The first public version. Changes since the 0.5 test build:

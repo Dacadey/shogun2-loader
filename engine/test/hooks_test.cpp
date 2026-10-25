@@ -17,10 +17,13 @@
 // --cyrillic-folder: this program and version.dll run again from a folder named with Cyrillic letters, whose name must
 // be in the log in UTF-8 (up to 0.4 the lines with a path lost all their text). With --long-folder: the same from a
 // folder whose path is too long for the log's name to fit in MAX_PATH (up to 0.5 that ended the process at start).
+// With --asi-plugin: this program runs again from build\asi with the DLL as plugins\shogun2_engine.asi and no
+// version.dll beside it, and loads the DLL itself before the engine, as an ASI loader does (--before-engine); all the
+// checks above must pass the same.
 //
 //   hooks_test.exe <input folder> <a .pack file> [number_of_threads]
 //                  [--crash | --unload | --other-build | --no-vsync-hook | --stack-overflow | --ini-case N |
-//                   --cyrillic-folder | --long-folder]
+//                   --cyrillic-folder | --long-folder | --asi-plugin]
 //   hooks_test.exe --check-dump
 #define NOMINMAX
 #include <windows.h>
@@ -312,6 +315,38 @@ static int LongFolder(const char *input) {
     return g_failures ? 1 : 0;
 }
 
+// --asi-plugin: Ultimate ASI Loader as winmm.dll, with the game started from Steam, loads plugins\*.asi before the engine
+// (the Steam overlay imports winmm.dll); up to 0.5.1 the DLL then saw no engine and only forwarded (checked in the game
+// 2026-10-25). This program runs again from build\asi, with the DLL as plugins\shogun2_engine.asi there and no
+// version.dll beside it, loads the plugin itself and then the engine (--before-engine), and must pass every check of a
+// normal run.
+static int AsiPlugin(const char *input, const char *pack) {
+    char exe[MAX_PATH];
+    GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    std::string dir(exe, strrchr(exe, '\\')), sub = dir + "\\asi";
+    CreateDirectoryA(sub.c_str(), nullptr);
+    CreateDirectoryA((sub + "\\plugins").c_str(), nullptr);
+    DeleteFileA((sub + "\\version.dll").c_str());  // the engine's own import must be Windows' version.dll
+    DeleteFileA((sub + "\\shogun2_engine.log").c_str());
+    bool copied = CopyFileA(exe, (sub + "\\hooks_test.exe").c_str(), FALSE) &&
+                  CopyFileA((dir + "\\version.dll").c_str(), (sub + "\\plugins\\shogun2_engine.asi").c_str(), FALSE);
+    Check(copied, "this program copied into build\\asi, the DLL as plugins\\shogun2_engine.asi there");
+    std::string cmd = "\"" + sub + "\\hooks_test.exe\" \"" + input + "\" \"" + pack + "\" --before-engine";
+    STARTUPINFOA si = {sizeof si};
+    PROCESS_INFORMATION pi = {};
+    DWORD code = 99;
+    fflush(stdout);
+    if (copied && CreateProcessA(nullptr, &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, sub.c_str(), &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 120000);
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    Check(code == 0, "the run there, with the plugin loaded before the engine, passed");
+    printf("%s: %d failure(s)\n", g_failures ? "FAILED" : "PASSED", g_failures);
+    return g_failures ? 1 : 0;
+}
+
 static void ShowLog(const std::string &dir, int maxLines) {
     printf("---- shogun2_engine.log\n");
     std::string log = dir + "\\shogun2_engine.log";
@@ -378,13 +413,13 @@ int main(int argc, char **argv) {
     if (argc < 3) {
         printf("usage: hooks_test <input folder> <a .pack file> [number_of_threads] [--crash | --unload | "
                "--other-build | --no-vsync-hook | --stack-overflow | --ini-case N | --cyrillic-folder | "
-               "--long-folder]\n"
+               "--long-folder | --asi-plugin]\n"
                "       hooks_test --check-dump\n");
         return 2;
     }
     int nthreads = argc > 3 && argv[3][0] != '-' ? atoi(argv[3]) : 0;
     bool crash = false, unload = false, otherBuild = false, noVsyncHook = false, stackOverflow = false;
-    bool cyrillicFolder = false, longFolder = false, pathsOnly = false;
+    bool cyrillicFolder = false, longFolder = false, pathsOnly = false, asiPlugin = false, beforeEngine = false;
     int iniCase = -1;
     for (int i = 3; i < argc; i++) {
         crash |= strcmp(argv[i], "--crash") == 0;
@@ -395,6 +430,8 @@ int main(int argc, char **argv) {
         cyrillicFolder |= strcmp(argv[i], "--cyrillic-folder") == 0;
         longFolder |= strcmp(argv[i], "--long-folder") == 0;
         pathsOnly |= strcmp(argv[i], "--paths-only") == 0;
+        asiPlugin |= strcmp(argv[i], "--asi-plugin") == 0;
+        beforeEngine |= strcmp(argv[i], "--before-engine") == 0;
         if (strcmp(argv[i], "--ini-case") == 0 && i + 1 < argc) iniCase = atoi(argv[++i]);
     }
     if (iniCase >= (int)kIniCases.size()) {
@@ -403,6 +440,7 @@ int main(int argc, char **argv) {
     }
     if (cyrillicFolder) return CyrillicFolder(argv[1]);
     if (longFolder) return LongFolder(argv[1]);
+    if (asiPlugin) return AsiPlugin(argv[1], argv[2]);
     if (pathsOnly) {
         // the copy --cyrillic-folder and --long-folder run: the engine with version.dll and the ini version.dll writes, then one file
         // (this program) opened through the pack reopen, for an "open" line with the folder in it
@@ -458,14 +496,38 @@ int main(int argc, char **argv) {
         printf("      engine copy with time stamp %08lX: %s\n", stamp, copy.c_str());
         engine = copy;
     }
+    HMODULE plugin = nullptr;
+    if (beforeEngine) {  // the copy --asi-plugin runs: the DLL first, as an ASI loader loads it, then the engine
+        plugin = LoadLibraryA((dir + "\\plugins\\shogun2_engine.asi").c_str());
+        Check(plugin && !GetModuleHandleA("empire.retail.dll"), "plugins\\shogun2_engine.asi is loaded before the engine");
+    }
     HMODULE m = LoadLibraryA(engine.c_str());
     if (!m) { printf("LoadLibrary(%s) failed: %lu\n", engine.c_str(), GetLastError()); return 1; }
     BYTE *base = (BYTE *)m;
-    HMODULE proxy = GetModuleHandleA("version.dll");
+    HMODULE proxy = beforeEngine ? plugin : GetModuleHandleA("version.dll");
     char proxyPath[MAX_PATH] = "";
     if (proxy) GetModuleFileNameA(proxy, proxyPath, MAX_PATH);
-    Check(proxy && _strnicmp(proxyPath, dir.c_str(), dir.size()) == 0, "version.dll is the proxy next to this program");
-    printf("      %s\n", proxyPath);
+    if (beforeEngine) {
+        HMODULE version = GetModuleHandleA("version.dll");
+        char versionPath[MAX_PATH] = "";
+        if (version) GetModuleFileNameA(version, versionPath, MAX_PATH);
+        Check(version && version != plugin, "the engine's version.dll is Windows' own, the fixes come from the plugin");
+        printf("      %s\n      %s\n", proxyPath, versionPath);
+        std::string log = dir + "\\shogun2_engine.log";
+        FILE *lf = _fsopen(log.c_str(), "r", _SH_DENYNO);
+        char line[1024];
+        bool named = false, early = false;
+        for (int i = 0; lf && fgets(line, sizeof line, lf) && i < 3; i++) {
+            if (i == 0) named = strstr(line, "(shogun2_engine.asi) loaded into") != nullptr;
+            early |= strstr(line, "before empire.retail.dll") != nullptr;
+        }
+        if (lf) fclose(lf);
+        Check(named, "the first line of the log names shogun2_engine.asi");
+        Check(early, "the log says it was loaded before the engine");
+    } else {
+        Check(proxy && _strnicmp(proxyPath, dir.c_str(), dir.size()) == 0, "version.dll is the proxy next to this program");
+        printf("      %s\n", proxyPath);
+    }
     auto inProxy = [&](const void *p) { return (BYTE *)p >= (BYTE *)proxy && (BYTE *)p < (BYTE *)proxy + 0x100000; };
 
     // through GetProcAddress: a static import would load version.dll before the engine, with nothing to patch
