@@ -1,5 +1,20 @@
 # Changes
 
+## 0.5.3 (2026-10-27)
+
+- The settings file, the log and the frame log are next to the DLL: next to `shogun2.exe` for `version.dll`, as
+  before, and in `plugins` for `plugins\shogun2_engine.asi`, where ASI plugins keep theirs. Up to 0.5.2 they were
+  always next to `shogun2.exe`, and an ini moved into `plugins` was not read (asked for on Nexus). The ASI download
+  holds no ini any more: the DLL writes it into `plugins` at the first start. An ini that 0.5.2's ASI download put
+  next to `shogun2.exe` still counts while `plugins` has none.
+- The log names the settings file it read (`settings file: ...`) and says when it wrote one with the defaults or left
+  another one unread.
+- The readme of the download says where to get Ultimate ASI Loader and how to install it (the 32-bit
+  `Ultimate-ASI-Loader.zip`, its `dinput8.dll` renamed to `winmm.dll`), and that the ASI download was tested together
+  with SharpFonts 1.0.1 and Ultimate ASI Loader 10.0.1.
+- Tests: `--asi-plugin` runs the plugin with its settings next to it, only next to `shogun2.exe`, nowhere and in both
+  places (0.5.2 fails them).
+
 ## 0.5.2 (2026-10-25)
 
 - Works as an ASI plugin too. A second download, `Shogun2Loader-0.5.2-ASI.zip`, has the same DLL as

@@ -19,7 +19,8 @@
 // folder whose path is too long for the log's name to fit in MAX_PATH (up to 0.5 that ended the process at start).
 // With --asi-plugin: this program runs again from build\asi with the DLL as plugins\shogun2_engine.asi and no
 // version.dll beside it, and loads the DLL itself before the engine, as an ASI loader does (--before-engine); all the
-// checks above must pass the same.
+// checks above must pass the same, with the settings next to the plugin, only next to this program, nowhere and in
+// both places, and the log next to the settings that were read.
 //
 //   hooks_test.exe <input folder> <a .pack file> [number_of_threads]
 //                  [--crash | --unload | --other-build | --no-vsync-hook | --stack-overflow | --ini-case N |
@@ -315,34 +316,82 @@ static int LongFolder(const char *input) {
     return g_failures ? 1 : 0;
 }
 
+static bool Exists(const std::string &path) { return GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+// Whether shogun2_engine.log in dir has a line with text in it.
+static bool LogHas(const std::string &dir, const char *text) {
+    FILE *lf = _fsopen((dir + "\\shogun2_engine.log").c_str(), "r", _SH_DENYNO);
+    char line[1024];
+    bool found = false;
+    while (lf && fgets(line, sizeof line, lf)) found |= strstr(line, text) != nullptr;
+    if (lf) fclose(lf);
+    return found;
+}
+
 // --asi-plugin: Ultimate ASI Loader as winmm.dll, with the game started from Steam, loads plugins\*.asi before the engine
 // (the Steam overlay imports winmm.dll); up to 0.5.1 the DLL then saw no engine and only forwarded (checked in the game
 // 2026-10-25). This program runs again from build\asi, with the DLL as plugins\shogun2_engine.asi there and no
 // version.dll beside it, loads the plugin itself and then the engine (--before-engine), and must pass every check of a
-// normal run.
+// normal run. Since 0.5.3 the DLL keeps its settings and log next to itself (asked for on Nexus), so that four times:
+// the settings next to the plugin; only next to this program, as 0.5.2's download put them, where they have to keep
+// counting; none, when the plugin writes its own next to itself; and in both places, where only the plugin's count
+// (the copy checks the intro movies, which only those turn off). The log has to be next to the settings that were
+// read, and nothing written in the other folder.
 static int AsiPlugin(const char *input, const char *pack) {
     char exe[MAX_PATH];
     GetModuleFileNameA(nullptr, exe, MAX_PATH);
-    std::string dir(exe, strrchr(exe, '\\')), sub = dir + "\\asi";
+    std::string dir(exe, strrchr(exe, '\\')), sub = dir + "\\asi", plugins = sub + "\\plugins";
     CreateDirectoryA(sub.c_str(), nullptr);
-    CreateDirectoryA((sub + "\\plugins").c_str(), nullptr);
+    CreateDirectoryA(plugins.c_str(), nullptr);
     DeleteFileA((sub + "\\version.dll").c_str());  // the engine's own import must be Windows' version.dll
-    DeleteFileA((sub + "\\shogun2_engine.log").c_str());
     bool copied = CopyFileA(exe, (sub + "\\hooks_test.exe").c_str(), FALSE) &&
-                  CopyFileA((dir + "\\version.dll").c_str(), (sub + "\\plugins\\shogun2_engine.asi").c_str(), FALSE);
+                  CopyFileA((dir + "\\version.dll").c_str(), (plugins + "\\shogun2_engine.asi").c_str(), FALSE);
     Check(copied, "this program copied into build\\asi, the DLL as plugins\\shogun2_engine.asi there");
-    std::string cmd = "\"" + sub + "\\hooks_test.exe\" \"" + input + "\" \"" + pack + "\" --before-engine";
-    STARTUPINFOA si = {sizeof si};
-    PROCESS_INFORMATION pi = {};
-    DWORD code = 99;
-    fflush(stdout);
-    if (copied && CreateProcessA(nullptr, &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, sub.c_str(), &si, &pi)) {
-        WaitForSingleObject(pi.hProcess, 120000);
-        GetExitCodeProcess(pi.hProcess, &code);
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
+    struct Layout {
+        const char *what, *args, *otherIni;  // otherIni: an ini next to this program besides the plugin's
+        bool inPlugins;                      // where the settings that count and the log are
+        const char *line;                    // in the log, after the settings file's name
+    };
+    size_t none = 0;  // the ini case without an ini, where the DLL writes its own
+    while (none < kIniCases.size() && kIniCases[none].text) none++;
+    std::string noIni = "--ini-in-plugins --ini-case " + std::to_string(none);
+    const Layout layouts[] = {
+        {"the settings next to the plugin", "--ini-in-plugins", nullptr, true, nullptr},
+        {"the settings only next to shogun2.exe, as 0.5.2's download put them", "", nullptr, false,
+         "(next to shogun2.exe: there is none next to shogun2_engine.asi)"},
+        {"no settings: the plugin writes its own", noIni.c_str(), nullptr, true,
+         "(there was none: written with the defaults)"},
+        {"settings in both places", "--ini-in-plugins", "[engine]\nskip_intro_movies=0\n", true,
+         "; the one next to shogun2.exe is not read"},
+    };
+    for (const Layout &l : layouts) {
+        printf("---- %s\n", l.what);
+        for (const std::string &f : {sub + "\\shogun2_engine.ini", sub + "\\shogun2_engine.log",
+                                     plugins + "\\shogun2_engine.ini", plugins + "\\shogun2_engine.log"})
+            DeleteFileA(f.c_str());
+        if (l.otherIni) {
+            FILE *f = fopen((sub + "\\shogun2_engine.ini").c_str(), "w");
+            fputs(l.otherIni, f);
+            fclose(f);
+        }
+        std::string cmd = "\"" + sub + "\\hooks_test.exe\" \"" + input + "\" \"" + pack + "\" --before-engine " + l.args;
+        STARTUPINFOA si = {sizeof si};
+        PROCESS_INFORMATION pi = {};
+        DWORD code = 99;
+        fflush(stdout);
+        if (copied && CreateProcessA(nullptr, &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, sub.c_str(), &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, 120000);
+            GetExitCodeProcess(pi.hProcess, &code);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+        }
+        Check(code == 0, "the run there, with the plugin loaded before the engine, passed");
+        const std::string &at = l.inPlugins ? plugins : sub, &other = l.inPlugins ? sub : plugins;
+        Check(Exists(at + "\\shogun2_engine.log") && !Exists(other + "\\shogun2_engine.log"),
+              l.inPlugins ? "the log is in plugins, none next to shogun2.exe" : "the log is next to shogun2.exe, none in plugins");
+        if (!l.otherIni) Check(!Exists(other + "\\shogun2_engine.ini"), "no settings file written in the other folder");
+        if (l.line) Check(LogHas(at, l.line), "the log says which settings file counts");
     }
-    Check(code == 0, "the run there, with the plugin loaded before the engine, passed");
     printf("%s: %d failure(s)\n", g_failures ? "FAILED" : "PASSED", g_failures);
     return g_failures ? 1 : 0;
 }
@@ -420,6 +469,7 @@ int main(int argc, char **argv) {
     int nthreads = argc > 3 && argv[3][0] != '-' ? atoi(argv[3]) : 0;
     bool crash = false, unload = false, otherBuild = false, noVsyncHook = false, stackOverflow = false;
     bool cyrillicFolder = false, longFolder = false, pathsOnly = false, asiPlugin = false, beforeEngine = false;
+    bool iniInPlugins = false;  // with --before-engine: the settings next to the plugin, and so the log
     int iniCase = -1;
     for (int i = 3; i < argc; i++) {
         crash |= strcmp(argv[i], "--crash") == 0;
@@ -432,6 +482,7 @@ int main(int argc, char **argv) {
         pathsOnly |= strcmp(argv[i], "--paths-only") == 0;
         asiPlugin |= strcmp(argv[i], "--asi-plugin") == 0;
         beforeEngine |= strcmp(argv[i], "--before-engine") == 0;
+        iniInPlugins |= strcmp(argv[i], "--ini-in-plugins") == 0;
         if (strcmp(argv[i], "--ini-case") == 0 && i + 1 < argc) iniCase = atoi(argv[++i]);
     }
     if (iniCase >= (int)kIniCases.size()) {
@@ -458,9 +509,11 @@ int main(int argc, char **argv) {
         TerminateProcess(GetCurrentProcess(), 0);  // the engine is still loaded
     }
 
-    // a test ini next to this program: everything on (texture_fast_path left out, as in older inis), dumps only with
-    // --crash and --stack-overflow; with --ini-case the case's ini instead
-    std::string ini = dir + "\\shogun2_engine.ini";
+    // a test ini next to this program (or with --ini-in-plugins next to the plugin, where the log then is too):
+    // everything on (texture_fast_path left out, as in older inis), dumps only with --crash and --stack-overflow; with
+    // --ini-case the case's ini instead
+    std::string logDir = beforeEngine && iniInPlugins ? dir + "\\plugins" : dir;
+    std::string ini = logDir + "\\shogun2_engine.ini";
     if (iniCase >= 0) {
         DeleteFileA(ini.c_str());
         if (const char *text = kIniCases[iniCase].text) {
@@ -513,7 +566,7 @@ int main(int argc, char **argv) {
         if (version) GetModuleFileNameA(version, versionPath, MAX_PATH);
         Check(version && version != plugin, "the engine's version.dll is Windows' own, the fixes come from the plugin");
         printf("      %s\n      %s\n", proxyPath, versionPath);
-        std::string log = dir + "\\shogun2_engine.log";
+        std::string log = logDir + "\\shogun2_engine.log";
         FILE *lf = _fsopen(log.c_str(), "r", _SH_DENYNO);
         char line[1024];
         bool named = false, early = false;
@@ -540,7 +593,7 @@ int main(int argc, char **argv) {
 
     std::string settings;
     std::vector<std::string> notes;
-    ReadSettingsLog(dir, settings, notes);
+    ReadSettingsLog(logDir, settings, notes);
     if (iniCase >= 0) {
         const IniCase &c = kIniCases[iniCase];
         printf("      ini case %d: %s\n", iniCase, c.what);
@@ -596,7 +649,7 @@ int main(int argc, char **argv) {
         Check(second == 1, "a second present 200 ms into a frame keeps vsync");
     }
     if (unload || otherBuild || noVsyncHook) {
-        ShowLog(dir, 1000);
+        ShowLog(logDir, 1000);
         printf("%s: %d failure(s)\n", g_failures ? "FAILED" : "PASSED", g_failures);
         fflush(stdout);
         if (!unload) TerminateProcess(GetCurrentProcess(), g_failures ? 1 : 0);  // the engine is still loaded
@@ -742,11 +795,11 @@ int main(int argc, char **argv) {
             throw std::bad_alloc();
         } catch (const std::bad_alloc &) {
         }
-        CheckDump(DumpInLog(dir), "a bad_alloc leaves a minidump");
+        CheckDump(DumpInLog(logDir), "a bad_alloc leaves a minidump");
     }
 
     fflush(stdout);
-    ShowLog(dir, 60);
+    ShowLog(logDir, 60);
     printf("%s: %d failure(s)\n", g_failures ? "FAILED" : "PASSED", g_failures);
     fflush(stdout);
     TerminateProcess(GetCurrentProcess(), g_failures ? 1 : 0);  // skip the engine's static destructors

@@ -28,8 +28,9 @@ readme that comes with the download ([in Russian](package/README_RU.txt)). What 
   each worker thread to a core of its own, the E-cores of hybrid Intel CPUs included. The DLL leaves them unpinned,
   with the main thread preferring the performance cores.
 - **Intro movies** (`skip_intro_movies`, off by default): straight to the main menu.
-- **Log and crash dumps.** `shogun2_engine.log` next to `shogun2.exe` has the settings, load times, frame rates and
-  the use of the 32-bit address space; when the game crashes, the DLL tries to write a minidump.
+- **Log and crash dumps.** `shogun2_engine.log` next to the DLL (next to `shogun2.exe`, or in `plugins` for the ASI
+  plugin) has the settings, load times, frame rates and the use of the 32-bit address space; when the game crashes,
+  the DLL tries to write a minidump.
 
 Every fix can be turned off in `shogun2_engine.ini`; see Settings in [package/README.txt](package/README.txt).
 
@@ -55,7 +56,9 @@ system folder and forwards every function to it.
 As an ASI plugin the same file is loaded by Ultimate ASI Loader, which, when the game is started from Steam, loads its
 plugins before the engine: the Steam overlay imports `winmm.dll` and brings the loader in at start. The DLL then has
 Windows tell it when the engine is loaded and comes in at the engine's entry point, right before the engine's own
-start-up code, the same point as `version.dll`. The first line of the log names the file it was loaded as.
+start-up code, the same point as `version.dll`. The first line of the log names the file it was loaded as. Like other
+plugins it keeps its settings and log next to itself, in `plugins`; an ini that 0.5.2 had next to `shogun2.exe` still
+counts while `plugins` has none.
 
 The fixes change the engine's own code in memory, in a few places. They are made for one build of the engine:
 `empire.retail.dll` 1.1.0 of 12 May 2023, the current Steam version. The DLL tells the build by the engine's time stamp
@@ -64,8 +67,9 @@ build it changes nothing, only forwards, and says so in its log. An engine file 
 with the same time stamp and size gets only the changes whose bytes still match; the log names the others. The DLL
 hooks nothing in DirectX or in other programs.
 
-Besides its log, the DLL writes only its settings file (when it is missing), the frame log if `frame_log=1`, and, when
-the game crashes, a minidump to `%APPDATA%\The Creative Assembly\Shogun2\crash_dumps` (the 10 newest are kept).
+Besides its log, the DLL writes only its settings file (when it is missing) and the frame log if `frame_log=1`, both
+next to the log, and, when the game crashes, a minidump to `%APPDATA%\The Creative Assembly\Shogun2\crash_dumps` (the
+10 newest are kept).
 
 [engine/src/engine.cpp](engine/src/engine.cpp) is the whole DLL, with [exports.def](engine/src/exports.def). The
 engine's addresses are at its top, and each fix is a numbered section with a comment on what the engine does there
@@ -94,7 +98,7 @@ place, set `SHOGUN2_DIR` to its folder. Build `version.dll` first.
   build of the engine (left alone), the engine unloaded as at the end of the game, a stack overflow (logged, with a
   minidump), settings files written the way players write them, a game folder with Cyrillic letters and one with a
   path too long for the log's name, and the DLL as an ASI plugin loaded before the engine (every check of the first
-  run again). The test minidumps go to `engine\test\build\dumps`, not to the game's folder, and are deleted again.
+  run again, with its settings next to it, only next to `shogun2.exe` as 0.5.2 had them, nowhere and in both places). The test minidumps go to `engine\test\build\dumps`, not to the game's folder, and are deleted again.
   About a minute.
 - `engine\test\tex_test.cmd` first gives the fast path broken and forged .dds headers, which it has to leave to D3DX
   without writing past its buffers or looping. Then it compares the textures of the fast path with those of D3DX, on a

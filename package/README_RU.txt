@@ -1,4 +1,4 @@
-Shogun 2 Loader 0.5.2 - исправления движка Total War: SHOGUN 2
+Shogun 2 Loader 0.5.3 - исправления движка Total War: SHOGUN 2
 ==============================================================
 
 Небольшая DLL, которую игра загружает вместе со своим движком; она исправляет кое-что в движке
@@ -8,12 +8,12 @@ Shogun 2 Loader 0.5.2 - исправления движка Total War: SHOGUN 2
 Какой файл скачать
 ------------------
 Мод выложен двумя файлами, внутри одна и та же DLL. Поставьте один из них, не оба.
-- Shogun2Loader-0.5.2.zip, DLL под именем version.dll: для большинства игроков. Больше ничего не
+- Shogun2Loader-0.5.3.zip, DLL под именем version.dll: для большинства игроков. Больше ничего не
   нужно.
-- Shogun2Loader-0.5.2-ASI.zip, DLL как плагин ASI (plugins\shogun2_engine.asi): только если у вас
+- Shogun2Loader-0.5.3-ASI.zip, DLL как плагин ASI (plugins\shogun2_engine.asi): только если у вас
   стоит Ultimate ASI Loader, например ради SharpFonts или других модов .asi, или если в папке
-  игры уже есть свой version.dll от другого мода. Сам Ultimate ASI Loader в архив не входит; он
-  здесь: https://github.com/ThirteenAG/Ultimate-ASI-Loader
+  игры уже есть свой version.dll от другого мода. Сам Ultimate ASI Loader в архив не входит;
+  где его взять, сказано в "Установке".
 В игре оба варианта работают одинаково.
 
 Что он делает
@@ -64,18 +64,26 @@ Shogun 2 Loader 0.5.2 - исправления движка Total War: SHOGUN 2
    - Архив с version.dll: version.dll и shogun2_engine.ini, чтобы version.dll лежал рядом с
      shogun2.exe. Если в папке игры уже есть version.dll от другого мода, остановитесь и
      возьмите архив ASI (см. "Совместимость").
-   - Архив ASI: папку plugins с shogun2_engine.asi внутри и shogun2_engine.ini. Ultimate ASI
-     Loader уже должен стоять в папке игры; мы проверяли его в роли winmm.dll (версия 10.0.0).
+   - Архив ASI: папку plugins с shogun2_engine.asi внутри. Файл настроек shogun2_engine.ini DLL
+     сама создаст в папке plugins при первом запуске.
+     В папке игры должен стоять и Ultimate ASI Loader. Если его ещё нет, скачайте
+     Ultimate-ASI-Loader.zip со страницы https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases
+     (не _x64: игра 32-битная) и положите dinput8.dll из него в папку игры под именем winmm.dll:
+     имя dinput8.dll занимают некоторые другие моды, в том числе моды масштаба интерфейса. (Если
+     Windows скрывает расширения файлов, файл виден как "dinput8": переименуйте его в "winmm".)
+     Так мы его и проверяли, версии 10.0.0 и 10.0.1.
 4. Запустите игру из Steam как обычно.
 
 Проверка, что всё работает
 --------------------------
-1. Дождитесь главного меню. В папке игры появился shogun2_engine.log (он пишется заново при каждом
-   запуске). Если его нет, скорее всего, DLL не загрузилась (или не смогла писать в папку игры):
-   проверьте, что version.dll лежит прямо рядом с shogun2.exe, а не в отдельной папке, или, с
-   архивом ASI, что Ultimate ASI Loader стоит, а shogun2_engine.asi лежит в папке plugins.
+1. Дождитесь главного меню. Рядом с DLL появился shogun2_engine.log: в папке игры, а с архивом ASI
+   в папке plugins (он пишется заново при каждом запуске). Если его нет, скорее всего, DLL не
+   загрузилась (или не смогла писать в эту папку): проверьте, что version.dll лежит прямо рядом с
+   shogun2.exe, а не в отдельной папке, или, с архивом ASI, что Ultimate ASI Loader стоит, а
+   shogun2_engine.asi лежит в папке plugins.
    Откройте лог Блокнотом. В начале должны быть такие строки (время и числа будут другими):
-     Shogun 2 engine fixes 0.5.2 (version.dll) loaded into C:\...\Total War SHOGUN 2
+     Shogun 2 engine fixes 0.5.3 (version.dll) loaded into C:\...\Total War SHOGUN 2
+     settings file: C:\...\Total War SHOGUN 2\shogun2_engine.ini
      settings: threads=free main_thread=pcores workers=any worker_count=0 pack_cache=1 ...
      threads: pool and main thread will be left unpinned
      pack_cache: on (no FILE_FLAG_NO_BUFFERING)
@@ -83,8 +91,9 @@ Shogun 2 Loader 0.5.2 - исправления движка Total War: SHOGUN 2
      textures: fast path on (files that already hold the asked-for format skip D3DX)
      loads_without_vsync: on (loading screens are presented without vsync)
      first frame: 15.5 s after the process started
-   С архивом ASI в первой строке вместо version.dll будет shogun2_engine.asi, а следующая скажет,
-   что DLL загрузилась раньше empire.retail.dll и вошла в точке входа движка.
+   С архивом ASI в первой строке вместо version.dll будет shogun2_engine.asi, следующая скажет,
+   что DLL загрузилась раньше empire.retail.dll и вошла в точке входа движка, а файл настроек
+   будет тот, что в папке plugins.
    Если есть строка "empire.retail.dll is build ...: nothing is changed, version.dll only
    forwards", эта версия игры не поддерживается, и игра работает как без мода.
    Строки, начинающиеся с "ini:", сразу под "settings:" значат, что в shogun2_engine.ini что-то
@@ -118,7 +127,11 @@ DLL только измеряет, а игра ведёт себя как без
 
 Настройки (shogun2_engine.ini, раздел [engine])
 -----------------------------------------------
-threads=free            free: Windows ставит потоки на любые ядра. engine: как в игре.
+Файл лежит рядом с DLL: рядом с shogun2.exe с архивом version.dll, в папке plugins с архивом ASI.
+Ini, который архив ASI версии 0.5.2 положил рядом с shogun2.exe, действует, пока в plugins нет
+своего; чтобы всё лежало в одном месте, перенесите его в plugins. Строка "settings file:" в логе
+называет файл, который действует.
+threads=free           free: Windows ставит потоки на любые ядра. engine: как в игре.
 main_thread=pcores      при threads=free: главный поток предпочитает производительные ядра
                         гибридных процессоров Intel; any: решает Windows.
 workers=any             при threads=free: какие ядра предпочитают рабочие потоки: any, pcores
@@ -153,10 +166,10 @@ crash_dumps=1           1: дамп при вылете в %APPDATA%\The Creativ
 - Другой мод, у которого тоже свой version.dll (так называют себя некоторые загрузчики
   плагинов): в папке игры помещается только один файл с таким именем, поэтому берите архив ASI
   вместе с Ultimate ASI Loader.
-- Ultimate ASI Loader и моды .asi: берите архив ASI. Проверено с Ultimate ASI Loader 10.0.0 в
-  роли winmm.dll и запуском игры из Steam; SharpFonts не проверялся. Ставьте только один из двух
-  архивов: с обоими DLL загрузится дважды, и вторая копия найдёт исправления уже сделанными и
-  оставит их как есть.
+- Ultimate ASI Loader и моды .asi: берите архив ASI. Проверено с Ultimate ASI Loader 10.0.0 и
+  10.0.1 в роли winmm.dll и запуском игры из Steam, а также вместе с SharpFonts 1.0.1 (его
+  собственный version.dll остаётся как есть). Ставьте только один из двух архивов: с обоими DLL
+  загрузится дважды, и вторая копия найдёт исправления уже сделанными и оставит их как есть.
 - Другая версия игры (другая сборка empire.retail.dll): DLL это замечает, ничего не меняет и
   пишет об этом в лог; игра работает как без неё. Если другой мод изменил empire.retail.dll, но
   оставил прежними его отметку сборки и размер, DLL вносит только те правки, код для которых
@@ -170,8 +183,9 @@ crash_dumps=1           1: дамп при вылете в %APPDATA%\The Creativ
 
 Удаление
 --------
-Удалите из папки игры version.dll (или, с архивом ASI, plugins\shogun2_engine.asi),
-shogun2_engine.ini, shogun2_engine.log и, если есть, shogun2_frames.csv.
+Удалите из папки игры version.dll, shogun2_engine.ini, shogun2_engine.log и, если есть,
+shogun2_frames.csv. С архивом ASI: plugins\shogun2_engine.asi и те же файлы в папке plugins (и
+рядом с shogun2.exe, если их там оставила версия 0.5.2).
 
 Ограничения
 -----------
@@ -179,7 +193,7 @@ shogun2_engine.ini, shogun2_engine.log и, если есть, shogun2_frames.csv
   Intel не проверялись.
 - Некоторые антивирусы могут не доверять неподписанной DLL, которая меняет код игры в памяти.
   SHA-256 этой DLL, одного и того же файла в обоих архивах (version.dll и shogun2_engine.asi):
-  12b3b76114fdb4268673accf4b45fc0066467de072a10ef56957ffe43d8d9e16
+  a6b212bc8c2fc5f7fa75fa41b791f8d245e6ad1e39c2ec782a96ae49e797f534
 - Smart App Control в Windows 11 не проверялся. Когда он включён, Windows может не загрузить
   неподписанную DLL, и тогда игра не запустится совсем: движок загружает version.dll вместе с
   собой. Удалите version.dll, и игра запустится как раньше.
@@ -192,4 +206,4 @@ shogun2_engine.ini, shogun2_engine.log и, если есть, shogun2_frames.csv
 стоит в папке пользователя): просмотрите лог, прежде чем выкладывать его публично. Дамп хранит
 копию памяти игры: отправляйте его лично, а не в открытом сообщении.
 
-Версия 0.5.2 (пробная сборка), 25.10.2026.
+Версия 0.5.3 (пробная сборка), 27.10.2026.

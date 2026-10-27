@@ -11,7 +11,8 @@
 // loader may load it before the engine; it then waits and comes in at the engine's entry point, right before the
 // engine's own start-up code, the same point as version.dll (see "start" at the end).
 //
-// Settings (shogun2_engine.ini next to shogun2.exe, written with defaults on first run), section [engine]:
+// Settings: shogun2_engine.ini next to the DLL (next to shogun2.exe as version.dll, in plugins as an ASI plugin; see
+// PickFolder), written with the defaults when there is none; section [engine]:
 //   threads=free          free: neither the main thread nor the worker pool is pinned to a core, so Windows can put
 //                         them on whichever core is free and fastest. engine: as the game does it (main thread pinned
 //                         to core 0, one pool thread pinned to each other core, E-cores included).
@@ -40,7 +41,7 @@
 // word; a value the DLL does not understand keeps it too, with a line starting with "ini:" under the settings line in
 // the log, as do keys that are no setting (typos), a setting written more than once (the first one counts, as Windows
 // reads it) and an ini without [engine].
-// Log: shogun2_engine.log next to shogun2.exe, in UTF-8.
+// Log: shogun2_engine.log in the folder of the settings, in UTF-8.
 #define NOMINMAX
 #include <windows.h>
 
@@ -59,7 +60,7 @@
 
 namespace {
 
-const char kVersion[] = "0.5.2";  // in the first line of the log; the package's README carries the same number
+const char kVersion[] = "0.5.3";  // in the first line of the log; the package's README carries the same number
 
 // ---------------------------------------------------------------- empire.retail.dll 1.1.0 (RVAs, base 0x10000000)
 const DWORD kPoolSetupCall = 0x9D485;     // engine start: call <pool setup> (thiscall (number_of_threads, pin), ret 8)
@@ -97,7 +98,8 @@ const char* const kNames[15] = {"GetFileVersionInfoA",     "GetFileVersionInfoBy
 
 FILE* g_log;
 BYTE* g_base;
-std::wstring g_dir;  // the folder of shogun2.exe
+std::wstring g_dir;          // where the DLL keeps its settings, log and frame log (PickFolder)
+std::string g_settingsNote;  // how the settings file was found, after its name in the log
 DWORD g_mainThread;
 bool g_threadsFree = true, g_mainPcores = true, g_packCache = true, g_skipIntro = false, g_frameLog = false;
 bool g_memoryLog = true, g_crashDumps = true, g_loadsNoVsync = true;
@@ -166,12 +168,13 @@ BOOL CALLBACK LoadRealOnce(PINIT_ONCE, PVOID, PVOID*) {
 
 void LoadReal() { InitOnceExecuteOnce(&g_realOnce, &LoadRealOnce, nullptr, nullptr); }
 
-// The folder of shogun2.exe, however long its path (up to 0.5 a buffer of MAX_PATH characters: in a game folder whose
-// path had 241 characters or more the log's name no longer fitted, and swprintf_s ended the game at start).
-std::wstring ExeFolder() {
+// The folder of a module (nullptr: shogun2.exe), however long its path (up to 0.5 a buffer of MAX_PATH characters: in
+// a game folder whose path had 241 characters or more the log's name no longer fitted, and swprintf_s ended the game
+// at start).
+std::wstring ModuleFolder(HMODULE module) {
     std::vector<wchar_t> buf(MAX_PATH);
     for (;;) {
-        DWORD n = GetModuleFileNameW(nullptr, buf.data(), (DWORD)buf.size());
+        DWORD n = GetModuleFileNameW(module, buf.data(), (DWORD)buf.size());
         if (n == 0) return std::wstring();
         if (n < buf.size()) {
             std::wstring path(buf.data(), n);
@@ -328,7 +331,7 @@ void ReadSettings() {
     if (!g_dir.empty() && GetFileAttributesW(ini) == INVALID_FILE_ATTRIBUTES) {
         FILE* f = nullptr;
         if (_wfopen_s(&f, ini, L"w") == 0 && f) {
-            fputs("; Shogun 2 engine fixes (version.dll). Delete version.dll to turn them all off.\n"
+            fputs("; Shogun 2 engine fixes. To turn them all off, delete the DLL: version.dll or plugins\\shogun2_engine.asi.\n"
                   "; Values: 1 or 0 for on/off (yes/no, true/false and on/off also work). A value the DLL does not\n"
                   ";        understand keeps its default; shogun2_engine.log then has a line starting with \"ini:\".\n"
                   "; threads: free lets Windows place the main thread and the worker pool on any core;\n"
@@ -352,8 +355,10 @@ void ReadSettings() {
                   "skip_intro_movies=0\nframe_log=0\nmemory_log=1\ncrash_dumps=1\n",
                   f);
             fclose(f);
+            g_settingsNote = " (there was none: written with the defaults)";
         }
     }
+    Log("settings file: %s%s", Utf8(path).c_str(), g_settingsNote.c_str());
     CheckIniKeys(ini);
     g_threadsFree = ReadWord(ini, L"threads", {L"free", L"engine"}) == 0;
     g_mainPcores = ReadWord(ini, L"main_thread", {L"pcores", L"any"}) == 0;
@@ -1381,6 +1386,7 @@ void Install() {
 // about every DLL loaded. When the engine has been mapped (its imports not filled in yet, so too early to patch), a
 // jump at its entry point brings this DLL in right before the engine's start-up code, the same point as version.dll.
 
+HMODULE g_self;           // this DLL
 std::wstring g_selfName;  // the file name this DLL was loaded as: version.dll, shogun2_engine.asi or the like
 SYSTEMTIME g_earlyAt;     // when it was loaded before the engine (wYear 0: it was not)
 bool g_started;
@@ -1388,12 +1394,34 @@ BYTE* g_engineEntry;  // the engine's entry point, once the jump to EngineEntry 
 BYTE g_entryCode[5];  // the engine's own first bytes there
 void* g_notifyCookie;
 
+bool IsFile(const std::wstring& path) {
+    DWORD a = GetFileAttributesW(path.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+// The settings, the log and the frame log go next to the DLL, as ASI plugins keep theirs: next to shogun2.exe as
+// version.dll, in plugins as plugins\shogun2_engine.asi. Up to 0.5.2 they were always next to shogun2.exe, and an ini
+// moved into plugins was not read (asked for on Nexus). The ASI download of 0.5.2 put the ini next to shogun2.exe:
+// while only that one is there, the DLL keeps to it, so the settings made there still count.
+std::wstring PickFolder(const std::wstring& exeDir) {
+    std::wstring own = ModuleFolder(g_self);
+    if (own.empty() || exeDir.empty() || _wcsicmp(own.c_str(), exeDir.c_str()) == 0) return own.empty() ? exeDir : own;
+    bool here = IsFile(own + L"\\shogun2_engine.ini"), there = IsFile(exeDir + L"\\shogun2_engine.ini");
+    if (there && !here) {
+        g_settingsNote = " (next to shogun2.exe: there is none next to " + Utf8(g_selfName) + ")";
+        return exeDir;
+    }
+    if (there) g_settingsNote = "; the one next to shogun2.exe is not read";
+    return own;
+}
+
 void Start() {
     g_started = true;
     g_mainThread = GetCurrentThreadId();
-    g_dir = ExeFolder();
+    std::wstring exeDir = ModuleFolder(nullptr);
+    g_dir = PickFolder(exeDir);
     if (!g_dir.empty()) g_log = _wfsopen((g_dir + L"\\shogun2_engine.log").c_str(), L"w", _SH_DENYWR);
-    Log("Shogun 2 engine fixes %s (%s) loaded into %s", kVersion, Utf8(g_selfName).c_str(), Utf8(g_dir).c_str());
+    Log("Shogun 2 engine fixes %s (%s) loaded into %s", kVersion, Utf8(g_selfName).c_str(), Utf8(exeDir).c_str());
     if (g_earlyAt.wYear)
         Log("%s was loaded at %02d:%02d:%02d.%03d, before empire.retail.dll (an ASI loader does that): it came in at the "
             "engine's entry point", Utf8(g_selfName).c_str(), g_earlyAt.wHour, g_earlyAt.wMinute, g_earlyAt.wSecond,
@@ -1516,6 +1544,7 @@ extern "C" void WINAPI EngineFixes_FrameStart(DWORD msAgo) {
 // No DisableThreadLibraryCalls: the static C runtime (/MT) needs the thread notifications (up to 0.5 it was called).
 BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
+        g_self = self;
         g_selfName = FileName(self);
         if (GetModuleHandleW(L"empire.retail.dll"))
             Start();  // loaded with the engine, as its version.dll (or by a loader the engine itself loaded)
